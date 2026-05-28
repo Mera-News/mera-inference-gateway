@@ -1,0 +1,50 @@
+name: Node.js CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20.x]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    # Seed .env from committed example so NestJS ConfigService and tests have
+    # the required env vars at startup. No real secrets are touched here —
+    # all values are placeholder strings from .env.example.
+    - name: Seed .env for CI
+      run: cp .env.example .env
+
+    - name: Run lint
+      run: npm run lint
+
+    - name: Typecheck
+      run: npm run typecheck
+
+    - name: Run unit tests with coverage
+      run: npm run test:cov
+
+    # The e2e suite spins up its own in-process JWKS server and tests
+    # health + auth rejection only — no Redis or MongoDB is required.
+    - name: Run e2e tests
+      run: npm run test:e2e
+
+    - name: Build
+      run: npm run build

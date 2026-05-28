@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest an idea or enhancement for the Mera Inference Gateway
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For larger features, please open this issue for discussion **before**
+        building a PR — see [CONTRIBUTING.md](../CONTRIBUTING.md). Note that
+        the gateway is intentionally minimal: its sole purpose is to authenticate
+        requests and proxy E2EE-encrypted payloads to NEAR AI.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem would this feature solve? What is the use case?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe what you would like to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: input
+    id: affected-endpoint
+    attributes:
+      label: Affected endpoint / route (if applicable)
+      placeholder: e.g. POST /api/chat, POST /api/batch-infer
+  - type: checkboxes
+    id: e2ee-impact
+    attributes:
+      label: E2EE passthrough impact
+      options:
+        - label: This feature does not require the gateway to read, log, or transform encrypted message content
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context

@@ -1,0 +1,21 @@
+Mera Inference Gateway
+Copyright 2025-2026 Mera News B.V.
+
+This product is distributed under the PolyForm Noncommercial License 1.0.0.
+See LICENSE.md for the full license text and TRADEMARK.md for trademark terms.
+
+------------------------------------------------------------------------------
+Third-party notices
+------------------------------------------------------------------------------
+
+This software depends on third-party open-source packages. The notices below
+cover license terms that require explicit acknowledgement or election. All
+other dependencies are distributed under permissive licenses (MIT, ISC,
+BSD-2-Clause, BSD-3-Clause) that require no additional notice beyond their
+own bundled license text in node_modules.
+
+Apache License 2.0 dependencies
+  This project transitively depends on packages licensed under the Apache
+  License 2.0. Their copyright and NOTICE terms are retained in their
+  respective package directories under node_modules. A copy of the Apache
+  License 2.0 is available at https://www.apache.org/licenses/LICENSE-2.0.
