@@ -19,7 +19,10 @@ import { MongooseModule } from '@nestjs/mongoose';
         }
         return {
           uri,
-          maxPoolSize: config.get<number>('INFERENCE_MONGODB_MAX_POOL_SIZE', 10),
+          maxPoolSize: config.get<number>('INFERENCE_MONGODB_MAX_POOL_SIZE', 3),
+          minPoolSize: 0,
+          maxIdleTimeMS: 30_000,
+          serverSelectionTimeoutMS: 10_000,
         };
       },
     }),
