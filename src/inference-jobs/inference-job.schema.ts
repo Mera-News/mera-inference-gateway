@@ -57,8 +57,11 @@ export class InferenceJob {
   @Prop({ type: String, required: true, index: true })
   userId!: string;
 
-  @Prop({ type: String, required: true })
-  expoPushToken!: string;
+  // Optional — null when the client submitted without a registered Expo push
+  // token. notify-user skips the silent push for these; the client polls
+  // GET /jobs/:id/results instead.
+  @Prop({ type: String, default: null })
+  expoPushToken!: string | null;
 
   @Prop({ type: E2EESessionHeadersSchema, default: null })
   e2eeSession!: E2EESessionHeaders | null;

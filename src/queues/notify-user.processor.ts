@@ -34,6 +34,13 @@ export class NotifyUserProcessor extends WorkerHost {
       throw new Error(`Inference job ${jobId} not found at notify-user`);
     }
 
+    // Tokenless job — the client submitted without a push token and will
+    // retrieve results by polling. Nothing to notify.
+    if (!doc.expoPushToken) {
+      this.logger.log(`jobId=${jobId} has no push token — skipping notify (client polls)`);
+      return { ok: true };
+    }
+
     await this.push.sendSilent({
       to: doc.expoPushToken,
       data: { type: 'inference-done', requestId: jobId },

@@ -58,11 +58,17 @@ export class E2EESessionDto {
 }
 
 export class SubmitJobDto {
+  // Optional: clients that never registered an Expo push token (e.g. Android
+  // devices where FCM registration failed) submit without it and retrieve
+  // results purely by polling GET /jobs/:id/results. When present it must be a
+  // valid Expo token so the completion silent-push can be delivered; when
+  // absent, notify-user skips the push.
+  @IsOptional()
   @IsString()
   @Matches(/^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/, {
     message: 'expoPushToken must be a valid Expo push token',
   })
-  expoPushToken!: string;
+  expoPushToken?: string;
 
   @IsOptional()
   @IsObject()
