@@ -1,4 +1,4 @@
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { JWT_ISSUER } from '../constants';
@@ -165,6 +165,94 @@ describe('AuthGuard', () => {
       await expect(guard.canActivate(makeContext('Bearer t'))).rejects.toThrow(
         UnauthorizedException,
       );
+    });
+  });
+
+  describe('JWKS reachability', () => {
+    let originalFetch: typeof global.fetch;
+    let mockFetch: jest.Mock;
+    let logSpy: jest.SpyInstance;
+    let warnSpy: jest.SpyInstance;
+    let errorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      mockFetch = jest.fn();
+      global.fetch = mockFetch;
+      logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    });
+
+    it('logs "verified" and resolves immediately when first fetch succeeds', async () => {
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await guard['verifyJwksReachability'](
+        new URL('https://issuer.test/jwks.json'),
+        'https://issuer.test/jwks.json',
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const logCall = logSpy.mock.calls[0][0] as string;
+      expect(logCall).toMatch(/verified/i);
+    });
+
+    it('retries once after a failed fetch and resolves with "verified" on second try', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 500 })
+        .mockResolvedValueOnce({ ok: true, status: 200 });
+
+      const promise = guard['verifyJwksReachability'](
+        new URL('https://issuer.test/jwks.json'),
+        'https://issuer.test/jwks.json',
+      );
+
+      // Let the first fetch settle and enter the catch block.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Advance past the 1000ms backoff timer so the second fetch runs.
+      await jest.advanceTimersByTimeAsync(1000);
+
+      await promise;
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const logCall = logSpy.mock.calls[0][0] as string;
+      expect(logCall).toMatch(/verified/i);
+    });
+
+    it('logs "giving up" and resolves when elapsed time exceeds the maximum', async () => {
+      // Make fetch always reject.
+      mockFetch.mockRejectedValue(new Error('connection refused'));
+
+      // Spy on Date.now: first call returns the start time (0), subsequent
+      // calls (inside the catch to compute elapsed) return a value past the
+      // 10-minute maximum so the give-up branch is taken immediately after
+      // the very first failure, keeping the test bounded.
+      const maxElapsedMs = 10 * 60 * 1000;
+      let callCount = 0;
+      jest.spyOn(Date, 'now').mockImplementation(() => {
+        // 0 on first call (start = 0), then beyond max on every later call.
+        return callCount++ === 0 ? 0 : maxElapsedMs + 1;
+      });
+
+      await guard['verifyJwksReachability'](
+        new URL('https://issuer.test/jwks.json'),
+        'https://issuer.test/jwks.json',
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const errorCall = errorSpy.mock.calls[0][0] as string;
+      expect(errorCall).toMatch(/giving up/i);
+      // warn should NOT have been called because we went straight to give-up.
+      expect(warnSpy).not.toHaveBeenCalled();
     });
   });
 
