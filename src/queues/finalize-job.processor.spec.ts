@@ -60,11 +60,7 @@ describe('FinalizeJobProcessor', () => {
 
       // Verify notify queue was called
       expect(notifyQueueMock.add).toHaveBeenCalledTimes(1);
-      expect(notifyQueueMock.add).toHaveBeenCalledWith(
-        'notify-user',
-        { jobId },
-        DEFAULT_JOB_OPTS,
-      );
+      expect(notifyQueueMock.add).toHaveBeenCalledWith('notify-user', { jobId }, DEFAULT_JOB_OPTS);
 
       // Verify return value
       expect(result).toEqual({ jobId });

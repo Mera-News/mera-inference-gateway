@@ -135,7 +135,7 @@ function makeFakeApp() {
 }
 
 /** Re-run bootstrap() by resetting module registry and re-importing main. */
-/* eslint-disable @typescript-eslint/no-var-requires */
+
 async function runBootstrap() {
   jest.resetModules();
   // Re-wire NestFactory.create to return our fresh fake app. ts-jest compiles
@@ -179,17 +179,13 @@ describe('main.ts bootstrap()', () => {
     });
 
     it('registers basic-auth middleware on /queues', () => {
-      const useCallsWithQueuesPath = fakeApp.use.mock.calls.filter(
-        (args) => args[0] === '/queues',
-      );
+      const useCallsWithQueuesPath = fakeApp.use.mock.calls.filter((args) => args[0] === '/queues');
       expect(useCallsWithQueuesPath.length).toBeGreaterThanOrEqual(1);
     });
 
     it('calls basicAuth with correct users object', () => {
       // Find the basicAuth call that set up user credentials.
-      expect(basicAuthMock).toHaveBeenCalledWith(
-        expect.objectContaining({ users: { u: 'p' } }),
-      );
+      expect(basicAuthMock).toHaveBeenCalledWith(expect.objectContaining({ users: { u: 'p' } }));
     });
 
     it('app.listen is called with port 8080', () => {
@@ -197,9 +193,7 @@ describe('main.ts bootstrap()', () => {
     });
 
     it('logs the startup message', () => {
-      expect(fakeApp._logger.log).toHaveBeenCalledWith(
-        expect.stringContaining('8080'),
-      );
+      expect(fakeApp._logger.log).toHaveBeenCalledWith(expect.stringContaining('8080'));
     });
   });
 
@@ -240,7 +234,9 @@ describe('main.ts bootstrap()', () => {
       // The compression mock was called with an options object containing filter.
       const compressionCallArgs = compressionMock.mock.calls[0];
       expect(compressionCallArgs).toBeDefined();
-      const opts = compressionCallArgs[0] as { filter?: (req: { path: string }, res: unknown) => boolean };
+      const opts = compressionCallArgs[0] as {
+        filter?: (req: { path: string }, res: unknown) => boolean;
+      };
       expect(opts.filter).toBeDefined();
 
       const result = opts.filter!({ path: '/v1/chat/completions' }, {});
@@ -249,7 +245,9 @@ describe('main.ts bootstrap()', () => {
 
     it('delegates to compression.filter for other paths', () => {
       const compressionCallArgs = compressionMock.mock.calls[0];
-      const opts = compressionCallArgs[0] as { filter?: (req: { path: string }, res: unknown) => boolean };
+      const opts = compressionCallArgs[0] as {
+        filter?: (req: { path: string }, res: unknown) => boolean;
+      };
 
       const fakeReq = { path: '/other' };
       const fakeRes = {};
@@ -276,9 +274,7 @@ describe('main.ts bootstrap()', () => {
     });
 
     it('logs success message with port 8080', () => {
-      expect(fakeApp._logger.log).toHaveBeenCalledWith(
-        expect.stringContaining('8080'),
-      );
+      expect(fakeApp._logger.log).toHaveBeenCalledWith(expect.stringContaining('8080'));
     });
   });
 

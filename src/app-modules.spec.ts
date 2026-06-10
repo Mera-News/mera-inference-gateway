@@ -99,7 +99,6 @@ jest.mock('jose', () => ({
 
 // ── Lazy imports (after all mocks are registered) ───────────────────────────
 
-/* eslint-disable @typescript-eslint/no-var-requires */
 describe('Feature modules are defined', () => {
   it('AuthModule is defined', () => {
     const { AuthModule } = require('./auth/auth.module');

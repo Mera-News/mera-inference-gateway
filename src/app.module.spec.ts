@@ -197,9 +197,7 @@ describe('AppModule – LoggerModule useFactory', () => {
 
   describe('LOG_LEVEL override', () => {
     it('respects explicit LOG_LEVEL over the NODE_ENV default', () => {
-      const result = mockCapture.loggerFactory(
-        cfg({ NODE_ENV: 'production', LOG_LEVEL: 'error' }),
-      );
+      const result = mockCapture.loggerFactory(cfg({ NODE_ENV: 'production', LOG_LEVEL: 'error' }));
       expect(result.pinoHttp.level).toBe('error');
     });
   });

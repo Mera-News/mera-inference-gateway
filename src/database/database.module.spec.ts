@@ -76,8 +76,8 @@ describe('DatabaseModule – Mongoose useFactory', () => {
   });
 
   it('throws when INFERENCE_MONGODB_URI is an empty string', () => {
-    expect(() =>
-      mockCapture.mongoFactory(cfg({ INFERENCE_MONGODB_URI: '' })),
-    ).toThrow(/INFERENCE_MONGODB_URI/);
+    expect(() => mockCapture.mongoFactory(cfg({ INFERENCE_MONGODB_URI: '' }))).toThrow(
+      /INFERENCE_MONGODB_URI/,
+    );
   });
 });

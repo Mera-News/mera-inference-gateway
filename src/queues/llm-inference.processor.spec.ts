@@ -80,10 +80,7 @@ describe('LlmInferenceProcessor', () => {
 
   it('rejects with "not found" when the document does not exist', async () => {
     const modelMock = makeModelMock(null);
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -98,17 +95,12 @@ describe('LlmInferenceProcessor', () => {
 
   it('rejects with "has no request at index" when requestIndex is out of bounds', async () => {
     const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     // requests has 1 entry (index 0); request index 99 is missing.
     const job = makeJob(jobId, 99);
 
-    await expect(processor.process(job as never)).rejects.toThrow(
-      /has no request at index/,
-    );
+    await expect(processor.process(job as never)).rejects.toThrow(/has no request at index/);
     expect(chatMock.proxyChat).not.toHaveBeenCalled();
     expect(modelMock.updateOne).not.toHaveBeenCalled();
   });
@@ -123,10 +115,7 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -137,10 +126,7 @@ describe('LlmInferenceProcessor', () => {
 
     // proxyChat called with the forwarded body and an empty headers object
     expect(chatMock.proxyChat).toHaveBeenCalledTimes(1);
-    const [calledBody, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [
-      unknown,
-      unknown,
-    ];
+    const [calledBody, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [unknown, unknown];
     expect(calledBody).toEqual({
       messages: [{ role: 'user', content: 'x' }],
     });
@@ -174,10 +160,7 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -209,10 +192,7 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockRejectedValue(new Error('boom'));
 
     const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -235,10 +215,7 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockRejectedValue('weird');
 
     const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -266,19 +243,13 @@ describe('LlmInferenceProcessor', () => {
       'X-Bad': 123, // number — must be dropped
     };
     const modelMock = makeModelMock(makeDoc({ e2eeSession }));
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
     await processor.process(job as never);
 
-    const [, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [
-      unknown,
-      Record<string, string>,
-    ];
+    const [, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [unknown, Record<string, string>];
     expect(calledHeaders).toEqual({ 'X-Signing-Algo': 'ed25519' });
     expect(calledHeaders).not.toHaveProperty('X-Bad');
   });
@@ -288,19 +259,13 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const modelMock = makeModelMock(makeDoc({ e2eeSession: null }));
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
     await processor.process(job as never);
 
-    const [, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [
-      unknown,
-      Record<string, string>,
-    ];
+    const [, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [unknown, Record<string, string>];
     expect(calledHeaders).toEqual({});
   });
 
@@ -318,10 +283,7 @@ describe('LlmInferenceProcessor', () => {
       sharedSystem: 'CIPHER',
     });
     const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -353,10 +315,7 @@ describe('LlmInferenceProcessor', () => {
       sharedSystem: null,
     });
     const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -377,10 +336,7 @@ describe('LlmInferenceProcessor', () => {
       sharedSystem: 'CIPHER',
     });
     const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(
-      chatMock as never,
-      modelMock as never,
-    );
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 

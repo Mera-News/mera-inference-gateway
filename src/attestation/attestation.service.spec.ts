@@ -32,15 +32,13 @@ describe('AttestationService', () => {
     });
 
     it('throws when NEAR_AI_API_KEY is empty string', () => {
-      expect(
-        () => new AttestationService(makeConfig({ NEAR_AI_API_KEY: '' })),
-      ).toThrow(/NEAR_AI_API_KEY/);
+      expect(() => new AttestationService(makeConfig({ NEAR_AI_API_KEY: '' }))).toThrow(
+        /NEAR_AI_API_KEY/,
+      );
     });
 
     it('succeeds when NEAR_AI_API_KEY is set', () => {
-      expect(
-        () => new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'my-key' })),
-      ).not.toThrow();
+      expect(() => new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'my-key' }))).not.toThrow();
     });
   });
 

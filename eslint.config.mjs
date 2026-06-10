@@ -43,6 +43,15 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/unbound-method': 'off',
       '@typescript-eslint/require-await': 'off',
+      // Some specs re-require modules after jest.resetModules() to re-run
+      // module-load side-effects (e.g. main.ts bootstrap) — dynamic import()
+      // is emitted as real ESM under `module: nodenext` and fails in jest's VM.
+      '@typescript-eslint/no-require-imports': 'off',
+      // `_`-prefixed params in jest.mock() factory stubs are intentionally unused.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
     },
   },
 );

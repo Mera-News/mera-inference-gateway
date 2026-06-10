@@ -1,6 +1,8 @@
 // Must mock expo-server-sdk before any import that reaches ExpoPushService.
 jest.mock('expo-server-sdk', () => {
-  const isExpoPushToken = jest.fn((t: string) => typeof t === 'string' && t.startsWith('ExponentPushToken['));
+  const isExpoPushToken = jest.fn(
+    (t: string) => typeof t === 'string' && t.startsWith('ExponentPushToken['),
+  );
   class Expo {
     static isExpoPushToken = isExpoPushToken;
     chunkPushNotifications = jest.fn((msgs: unknown[]) => [msgs]);
@@ -41,13 +43,12 @@ function makePush(): jest.Mocked<Pick<ExpoPushService, 'sendSilent'>> {
 // ---------------------------------------------------------------------------
 
 describe('NotifyUserProcessor', () => {
-  let warnSpy: jest.SpyInstance;
-  let errorSpy: jest.SpyInstance;
   let logSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    // 'warn'/'error' are silenced for clean output; only 'log' is asserted on.
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
   });
 

@@ -153,9 +153,7 @@ describe('QueuesModule – BullModule useFactory', () => {
   });
 
   it('parses redis://user:pw@host:6380 correctly', () => {
-    const result = mockCapture.bullFactory(
-      cfg({ INFERENCE_REDIS_URL: 'redis://:pw@host:6380' }),
-    );
+    const result = mockCapture.bullFactory(cfg({ INFERENCE_REDIS_URL: 'redis://:pw@host:6380' }));
     expect(result).toMatchObject({
       connection: {
         host: 'host',
@@ -186,8 +184,8 @@ describe('QueuesModule – BullModule useFactory', () => {
   });
 
   it('throws when INFERENCE_REDIS_URL is an empty string', () => {
-    expect(() =>
-      mockCapture.bullFactory(cfg({ INFERENCE_REDIS_URL: '' })),
-    ).toThrow(/INFERENCE_REDIS_URL/);
+    expect(() => mockCapture.bullFactory(cfg({ INFERENCE_REDIS_URL: '' }))).toThrow(
+      /INFERENCE_REDIS_URL/,
+    );
   });
 });

@@ -117,7 +117,7 @@ describe('chatCompletions (streaming)', () => {
       status: 206,
       headerMap: {
         'content-type': 'text/event-stream',
-        'authorization': 'secret',
+        authorization: 'secret',
         'transfer-encoding': 'chunked',
       },
       body: {} as unknown,
@@ -211,7 +211,7 @@ describe('chatCompletions (streaming)', () => {
     await controller.chatCompletions(makeReq({}), res);
 
     // extract the error handler registered via .on('error', handler)
-    const onCalls = (fakeNodeStream.on as jest.Mock).mock.calls as [string, Function][];
+    const onCalls = fakeNodeStream.on.mock.calls as [string, (err: Error) => void][];
     const [, errorHandler] = onCalls.find(([event]) => event === 'error')!;
 
     errorHandler(new Error('boom'));
@@ -230,7 +230,7 @@ describe('chatCompletions (streaming)', () => {
     const res = makeRes(true);
     await controller.chatCompletions(makeReq({}), res);
 
-    const onCalls = (fakeNodeStream.on as jest.Mock).mock.calls as [string, Function][];
+    const onCalls = fakeNodeStream.on.mock.calls as [string, (err: Error) => void][];
     const [, errorHandler] = onCalls.find(([event]) => event === 'error')!;
 
     // Clear any prior calls from setup
@@ -278,26 +278,26 @@ describe('chatCompletions (streaming)', () => {
     const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
     chatService.proxyChat.mockResolvedValue(upstream);
 
-    const req = makeReq({}, {
-      'x-signing-algo': 'ed',
-      'x-client-pub-key': 'k',
-      'x-model-pub-key': ['arr'],   // array — must be dropped
-      'x-encryption-version': 'v2',
-    });
+    const req = makeReq(
+      {},
+      {
+        'x-signing-algo': 'ed',
+        'x-client-pub-key': 'k',
+        'x-model-pub-key': ['arr'], // array — must be dropped
+        'x-encryption-version': 'v2',
+      },
+    );
 
     const res = makeRes();
     await controller.chatCompletions(req, res);
 
-    expect(chatService.proxyChat).toHaveBeenCalledWith(
-      expect.anything(),
-      {
-        'X-Signing-Algo': 'ed',
-        'X-Client-Pub-Key': 'k',
-        'X-Encryption-Version': 'v2',
-        // X-Model-Pub-Key must be absent because the value was an array
-      },
-    );
-    const headersArg = (chatService.proxyChat as jest.Mock).mock.calls[0][1] as Record<string, string>;
+    expect(chatService.proxyChat).toHaveBeenCalledWith(expect.anything(), {
+      'X-Signing-Algo': 'ed',
+      'X-Client-Pub-Key': 'k',
+      'X-Encryption-Version': 'v2',
+      // X-Model-Pub-Key must be absent because the value was an array
+    });
+    const headersArg = chatService.proxyChat.mock.calls[0][1] as Record<string, string>;
     expect(headersArg).not.toHaveProperty('X-Model-Pub-Key');
   });
 });

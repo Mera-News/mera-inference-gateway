@@ -32,14 +32,14 @@ function makeConfig(values: Record<string, unknown>): ConfigService {
 describe('ExpoPushService', () => {
   let warnSpy: jest.SpyInstance;
   let errorSpy: jest.SpyInstance;
-  let logSpy: jest.SpyInstance;
 
   beforeEach(() => {
     // Clear call counts first so the spies we set up below start clean.
     jest.clearAllMocks();
     warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    // 'log' is silenced too, but no test asserts on it.
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
   });
 
   afterEach(() => {

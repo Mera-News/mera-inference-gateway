@@ -1,11 +1,7 @@
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate, ValidationError } from 'class-validator';
-import {
-  MAX_REQUESTS_PER_JOB,
-  MAX_SHARED_SYSTEM_BYTES,
-  SubmitJobDto,
-} from './submit-job.dto';
+import { MAX_REQUESTS_PER_JOB, MAX_SHARED_SYSTEM_BYTES, SubmitJobDto } from './submit-job.dto';
 
 /** Recursively collect every constraint key from a ValidationError tree. */
 function collectConstraints(errors: ValidationError[]): string[] {
