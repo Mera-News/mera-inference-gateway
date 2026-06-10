@@ -2,11 +2,11 @@
 
 Thank you for your interest in contributing to the Mera Inference Gateway.
 
-## Source-Available, Not Open Source
+## Proprietary — Not Open Source
 
-This project is governed by the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use requires a separate written agreement with Mera News B.V. Contributions you submit become subject to the same license (see "License of Contributions" below).
+This project is proprietary and confidential. All rights are reserved by Mera Labs B.V. (KVK 42077437); see [LICENSE.md](LICENSE.md). No license to use, copy, modify, or distribute the source code is granted. Contributions are accepted only from people authorized in writing by Mera Labs B.V., and any contribution is assigned to Mera Labs B.V. (see "License of Contributions" below).
 
-`"private": true` in `package.json` is intentional. It prevents accidental `npm publish` but does not restrict source distribution. The PolyForm Noncommercial License 1.0.0 in `LICENSE.md` governs what you may do with the source code.
+`"private": true` in `package.json` is intentional — it prevents accidental `npm publish`. The proprietary terms in `LICENSE.md` govern what you may do with the source code.
 
 ## What We Accept
 
@@ -21,9 +21,9 @@ For larger feature PRs, **open an issue for discussion before building**. This a
 
 - PRs that remove, modify, or bypass `LICENSE.md`, `TRADEMARK.md`, or the `"license"` field in `package.json`
 - PRs that re-introduce hardcoded `mera.news` URLs or internal service addresses (these must use environment variables via `.env.example` and `ConfigService` instead)
-- PRs that introduce new Mera trademarks into copy or configuration in a way that would require trademark permission from Mera News B.V. (see [TRADEMARK.md](TRADEMARK.md))
+- PRs that introduce new Mera trademarks into copy or configuration in a way that would require trademark permission from Mera Labs B.V. (see [TRADEMARK.md](TRADEMARK.md))
 - PRs that add code reading, logging, or transforming encrypted message content — the gateway is an intentional E2EE passthrough
-- Dependency additions without a license review (run `npx license-checker --summary` and check compatibility with PolyForm Noncommercial)
+- Dependency additions without a license review (run `npx license-checker --summary` and confirm every dependency permits commercial, proprietary redistribution)
 
 ## Development Setup
 
@@ -101,11 +101,11 @@ Before submitting a PR, confirm:
 
 ## License of Contributions
 
-By submitting a pull request you agree that:
+By submitting a contribution you agree that:
 
-1. Your contribution is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
-2. You have the right to make the contribution (you own it or have permission from the owner).
-3. You understand that contributions do not grant you any rights to the Mera trademarks.
+1. You assign to Mera Labs B.V. all right, title, and interest in and to your contribution, which becomes part of the proprietary Software governed by [LICENSE.md](LICENSE.md). To the extent any right cannot be assigned, you grant Mera Labs B.V. a perpetual, worldwide, royalty-free, irrevocable license to use it for any purpose.
+2. You have the right to make the contribution (you own it or have written permission from the owner).
+3. The contribution does not grant you any license to the Software or any rights to the Mera trademarks.
 
 ## Contact
 

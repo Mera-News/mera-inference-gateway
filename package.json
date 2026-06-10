@@ -2,9 +2,9 @@
   "name": "mera-inference-gateway",
   "version": "0.1.0",
   "description": "Privacy-first E2EE inference gateway — proxies encrypted chat requests to NEAR AI without ever accessing user data",
-  "author": "Mera News B.V.",
+  "author": "Mera Labs B.V.",
   "private": true,
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mera-news/mera-inference-gateway.git"

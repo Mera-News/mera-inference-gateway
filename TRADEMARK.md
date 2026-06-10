@@ -1,9 +1,9 @@
-# Trademark Notice — Mera News B.V.
+# Trademark Notice — Mera Labs B.V.
 
 ## Protected Marks
 
 The following names, terms, and associated logos are trademarks of
-**Mera News B.V.**, registered in the Netherlands (KVK):
+**Mera Labs B.V.**, registered in the Netherlands (KVK):
 
 - "Mera"
 - "Mera News"
@@ -16,12 +16,10 @@ The following names, terms, and associated logos are trademarks of
 
 ### You MAY:
 
-- Use the source code under the terms of the PolyForm Noncommercial
-  License 1.0.0
-- Fork and modify the code for personal, educational, or research
-  purposes
+- Use the source code only as expressly permitted in writing by Mera
+  Labs B.V. under the proprietary terms of [LICENSE.md](LICENSE.md)
 - Refer to this project by name solely to accurately describe its
-  origin (e.g., "based on code originally from Mera News")
+  origin, where you are otherwise authorized to use the code
 
 ### You MAY NOT:
 
@@ -30,7 +28,7 @@ The following names, terms, and associated logos are trademarks of
 - Use any Mera logos, icons, or visual branding in your fork or
   derivative work
 - Imply that your project is affiliated with, endorsed by, or
-  connected to Mera News B.V. in any way
+  connected to Mera Labs B.V. in any way
 - Use Mera trademarks in domain names, service listings, social
   media accounts, or marketing materials
 - Modify or create variations of Mera trademarks (e.g., "MeraPlus,"
@@ -58,4 +56,4 @@ applicable European Union trademark regulations.
 
 ---
 
-© 2025-2026 Mera News B.V. All trademark rights reserved.
+© 2025-2026 Mera Labs B.V. All trademark rights reserved.
