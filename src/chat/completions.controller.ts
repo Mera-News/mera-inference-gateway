@@ -107,7 +107,10 @@ export class CompletionsController {
   @Post('chat/completions/batch')
   async batchChatCompletions(@Req() req: AuthenticatedRequest, @Res() res: Response) {
     const userId = req.user?.id;
-    const { requests } = req.body as { requests: unknown[] };
+    // Guard against a null/undefined body — Express 5 leaves req.body undefined
+    // for POSTs whose content-type the json/urlencoded parsers don't handle.
+    // Destructuring it directly would throw a TypeError (→ 500); degrade to 400.
+    const { requests } = (req.body ?? {}) as { requests?: unknown[] };
 
     if (!Array.isArray(requests) || requests.length === 0) {
       res.status(400).json({ error: '`requests` must be a non-empty array' });

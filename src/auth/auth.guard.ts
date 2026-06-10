@@ -122,13 +122,25 @@ export class AuthGuard implements CanActivate, OnModuleInit {
 
       const jwtPayload = payload as MeraJwtPayload;
 
+      // A token with no subject cannot identify a principal. Falling back to an
+      // empty-string id would let an unidentifiable caller act as the owner of
+      // any doc whose userId is '' — reject instead.
+      const id = jwtPayload.sub ?? jwtPayload.userId;
+      if (!id) {
+        throw new UnauthorizedException('Token is missing a subject claim');
+      }
+
       request.user = {
-        id: jwtPayload.sub ?? jwtPayload.userId ?? '',
+        id,
         subscriptionIsActive: jwtPayload.subscriptionIsActive === true,
       };
 
       return true;
     } catch (error: unknown) {
+      // Re-throw our own auth rejections verbatim (don't relabel as "failed").
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
       if (
         error instanceof joseErrors.JWTExpired ||
         error instanceof joseErrors.JWSSignatureVerificationFailed ||

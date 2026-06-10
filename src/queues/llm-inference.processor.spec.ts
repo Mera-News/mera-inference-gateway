@@ -390,4 +390,47 @@ describe('LlmInferenceProcessor', () => {
     // Same reference — maybePrependSharedSystem returns body untouched
     expect(calledBody).toBe(originalBody);
   });
+
+  it('passes body by same reference when sharedSystem is an empty string', async () => {
+    const upstream = makeResponse({ ok: true, jsonValue: { choices: [] } });
+    chatMock.proxyChat.mockResolvedValue(upstream);
+
+    const originalBody = { messages: [{ role: 'user', content: 'x' }] };
+    const doc = makeDoc({
+      requests: [{ id: 'r0', body: originalBody }],
+      sharedSystem: '', // falsy — the `!sharedSystem` guard must short-circuit
+    });
+    const modelMock = makeModelMock(doc);
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const jobId = new Types.ObjectId().toString();
+
+    await processor.process(makeJob(jobId, 0) as never);
+
+    const [calledBody] = chatMock.proxyChat.mock.calls[0] as [unknown, unknown];
+    expect(calledBody).toBe(originalBody);
+  });
+
+  it('prepends sharedSystem onto an empty messages array', async () => {
+    const upstream = makeResponse({ ok: true, jsonValue: { choices: [] } });
+    chatMock.proxyChat.mockResolvedValue(upstream);
+
+    const originalMessages: Array<{ role: string; content: unknown }> = [];
+    const doc = makeDoc({
+      requests: [{ id: 'r0', body: { messages: originalMessages } }],
+      sharedSystem: 'CIPHER',
+    });
+    const modelMock = makeModelMock(doc);
+    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const jobId = new Types.ObjectId().toString();
+
+    await processor.process(makeJob(jobId, 0) as never);
+
+    const [calledBody] = chatMock.proxyChat.mock.calls[0] as [
+      { messages: Array<{ role: string; content: unknown }> },
+      unknown,
+    ];
+    expect(calledBody.messages).toEqual([{ role: 'system', content: 'CIPHER' }]);
+    // original empty array is untouched
+    expect(originalMessages).toHaveLength(0);
+  });
 });

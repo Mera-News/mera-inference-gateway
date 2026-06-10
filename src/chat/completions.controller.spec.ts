@@ -341,6 +341,30 @@ describe('CompletionsController (batch)', () => {
     expect(chatService.proxyChat).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when the request body is undefined (no JSON parsed)', async () => {
+    // Express 5 leaves req.body undefined for a POST whose content-type the
+    // json/urlencoded parsers do not handle. The handler must degrade to a
+    // clean 400, not throw a TypeError destructuring undefined.
+    const res = makeRes();
+    await controller.batchChatCompletions(makeReq(undefined), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(chatService.proxyChat).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the request body is null', async () => {
+    const res = makeRes();
+    await controller.batchChatCompletions(makeReq(null), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(chatService.proxyChat).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when `requests` is present but not an array', async () => {
+    const res = makeRes();
+    await controller.batchChatCompletions(makeReq({ requests: 'nope' }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(chatService.proxyChat).not.toHaveBeenCalled();
+  });
+
   it('returns 503 when the queue cannot accept the batch', async () => {
     queue.canAccept.mockReturnValue(false);
     const res = makeRes();

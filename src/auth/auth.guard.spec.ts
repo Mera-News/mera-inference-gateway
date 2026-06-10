@@ -130,6 +130,18 @@ describe('AuthGuard', () => {
       });
     });
 
+    it('rejects a validly-signed JWT that carries neither sub nor userId', async () => {
+      // A token with no subject cannot identify a principal. Authenticating it
+      // as the empty-string user would let an unidentifiable caller act as the
+      // owner of any doc whose userId is '' — reject instead.
+      mockJwtVerify.mockResolvedValue({
+        payload: { iss: JWT_ISSUER, subscriptionIsActive: true },
+      });
+      await expect(guard.canActivate(makeContext('Bearer no.subject.token'))).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
     it('honors AUTH_JWT_ISSUER override', async () => {
       configValues.AUTH_JWT_ISSUER = 'fork-issuer';
       guard.onModuleInit();
