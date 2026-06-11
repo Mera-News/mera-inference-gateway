@@ -17,13 +17,14 @@ jobs:
     # The e2e suite boots the full AppModule, which opens Redis (BullMQ) and
     # MongoDB (Mongoose) connections at startup. Provide both as throwaway
     # service containers on their default localhost ports.
-    # Images are pulled from the AWS Public ECR mirror of Docker Official Images
+    # Images are pulled from Google's public Docker Hub mirror (mirror.gcr.io)
     # rather than Docker Hub directly: hosted runners frequently hit Docker Hub
     # anonymous rate limits / reachability timeouts ("context deadline exceeded")
-    # during "Initialize containers". The ECR mirror has no anonymous pull limits.
+    # during "Initialize containers". mirror.gcr.io is a no-auth pull-through
+    # cache with no anonymous pull limits (and we already deploy on GCP).
     services:
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports:
           - 6379:6379
         options: >-
@@ -32,7 +33,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       mongo:
-        image: public.ecr.aws/docker/library/mongo:7
+        image: mirror.gcr.io/library/mongo:7
         ports:
           - 27017:27017
         options: >-
