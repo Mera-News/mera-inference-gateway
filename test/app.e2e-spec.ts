@@ -26,6 +26,15 @@ describe('InferenceGateway (e2e)', () => {
 
     process.env.NEAR_AI_API_KEY = 'test-key';
     process.env.AUTH_JWKS_URL = `http://localhost:${jwksPort}/jwks`;
+    // Valid 32-byte hex secret — the .env.example placeholder is not hex and
+    // would make CapabilityTokenService.onModuleInit throw at boot.
+    process.env.INFERENCE_CAPABILITY_SECRET = 'a'.repeat(64);
+    // AppModule opens these connections on boot (Mongoose blocks init until it
+    // connects). The GitHub workflow provisions redis + mongo service containers
+    // on these localhost ports. Overridable so a dev can point at a Mongo/Redis
+    // on a non-default port (e.g. when 27017/6379 are taken locally).
+    process.env.INFERENCE_REDIS_URL ??= 'redis://localhost:6379';
+    process.env.INFERENCE_MONGODB_URI ??= 'mongodb://localhost:27017/mera-inference-e2e';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -34,12 +43,16 @@ describe('InferenceGateway (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
     await app.init();
-  });
+    // app.init() establishes the Mongoose connection and starts BullMQ workers,
+    // which exceeds jest's default 5s hook budget on a cold connection.
+  }, 30_000);
 
   afterAll(async () => {
-    await app.close();
-    jwksServer.close();
-  });
+    // Guard: if beforeAll threw before assigning `app`, app.close() would itself
+    // throw and mask the real boot error.
+    await app?.close();
+    jwksServer?.close();
+  }, 15_000);
 
   it('GET /health should return 200', () => {
     return request(app.getHttpServer()).get('/health').expect(200).expect({ status: 'ok' });

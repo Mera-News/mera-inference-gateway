@@ -14,6 +14,29 @@ jobs:
       matrix:
         node-version: [20.x]
 
+    # The e2e suite boots the full AppModule, which opens Redis (BullMQ) and
+    # MongoDB (Mongoose) connections at startup. Provide both as throwaway
+    # service containers on their default localhost ports.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
     - uses: actions/checkout@v4
 
@@ -42,7 +65,8 @@ jobs:
       run: npm run test:cov
 
     # The e2e suite spins up its own in-process JWKS server and tests
-    # health + auth rejection only — no Redis or MongoDB is required.
+    # health + auth rejection, booting the full AppModule against the redis
+    # and mongo service containers declared above.
     - name: Run e2e tests
       run: npm run test:e2e
 
