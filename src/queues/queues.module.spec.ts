@@ -121,7 +121,7 @@ jest.mock('./flow.service', () => ({
 // 9. Stub inference-job schema (pulled by processor stubs' original imports
 //    when not fully mocked, and by the module itself via forFeature)
 // ---------------------------------------------------------------------------
-jest.mock('../inference-jobs/inference-job.schema', () => ({
+jest.mock('../models/inference-job.schema', () => ({
   InferenceJob: { name: 'InferenceJob' },
   InferenceJobSchema: {},
 }));

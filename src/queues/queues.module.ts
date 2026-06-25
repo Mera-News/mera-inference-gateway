@@ -6,7 +6,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ChatModule } from '../chat/chat.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { InferenceJob, InferenceJobSchema } from '../inference-jobs/inference-job.schema';
+import { InferenceJob, InferenceJobSchema } from '../models/inference-job.schema';
 import { LlmInferenceProcessor } from './llm-inference.processor';
 import { FinalizeJobProcessor } from './finalize-job.processor';
 import { NotifyUserProcessor } from './notify-user.processor';

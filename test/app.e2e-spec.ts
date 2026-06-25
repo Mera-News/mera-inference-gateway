@@ -12,7 +12,9 @@ describe('InferenceGateway (e2e)', () => {
 
   beforeAll(async () => {
     // Generate a test Ed25519 keypair and serve the public key via a local JWKS server
-    const { publicKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+    const { publicKey } = await generateKeyPair('EdDSA', {
+      crv: 'Ed25519',
+    });
     const publicJwk = await exportJWK(publicKey);
     publicJwk.alg = 'EdDSA';
     publicJwk.kid = 'test-key-001';
@@ -31,10 +33,19 @@ describe('InferenceGateway (e2e)', () => {
     process.env.INFERENCE_CAPABILITY_SECRET = 'a'.repeat(64);
     // AppModule opens these connections on boot (Mongoose blocks init until it
     // connects). The GitHub workflow provisions redis + mongo service containers
-    // on these localhost ports. Overridable so a dev can point at a Mongo/Redis
-    // on a non-default port (e.g. when 27017/6379 are taken locally).
-    process.env.INFERENCE_REDIS_URL ??= 'redis://localhost:6379';
-    process.env.INFERENCE_MONGODB_URI ??= 'mongodb://localhost:27017/mera-inference-e2e';
+    // on these localhost ports. Pin to localhost (hard-set, not ??=) so a stray
+    // INFERENCE_MONGODB_URI in the dev's shell — e.g. an Atlas URI from .env —
+    // can't redirect the e2e at a remote, IP-whitelisted cluster. E2E is always
+    // meant to run against the ephemeral local/CI services. Override via
+    // MERA_E2E_* if 27017/6379 are taken locally.
+    process.env.INFERENCE_REDIS_URL = process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
+    // directConnection=true: a single-node replica set (common in Docker) can
+    // advertise an internal container hostname the host can't resolve; this
+    // tells the driver to talk to the given host directly without topology
+    // discovery.
+    process.env.INFERENCE_MONGODB_URI =
+      process.env.MERA_E2E_MONGODB_URI ??
+      'mongodb://localhost:27017/mera-inference-e2e?directConnection=true';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],

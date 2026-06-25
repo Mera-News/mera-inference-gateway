@@ -21,7 +21,7 @@ import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { InferenceJobsService } from './inference-jobs.service';
-import { InferenceJob, InferenceJobDocument } from './inference-job.schema';
+import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
 import { SubmitJobDto } from './dto/submit-job.dto';
 
 @Controller('v1/inference')

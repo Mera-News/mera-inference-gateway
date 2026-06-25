@@ -21,18 +21,27 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     let status: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal server error';
+    // Extra structured fields the thrower attached (e.g. the rate-limit guard's
+    // `code` / `resetAt` / `limit`). Forwarded so clients can act on them.
+    let extra: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
       if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
-      } else if (
-        typeof exceptionResponse === 'object' &&
-        exceptionResponse !== null &&
-        'message' in exceptionResponse
-      ) {
-        message = String((exceptionResponse as Record<string, unknown>).message);
+      } else if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+        const obj = exceptionResponse as Record<string, unknown>;
+        if ('message' in obj) {
+          message = String(obj.message);
+        } else {
+          message = exception.message;
+        }
+        // Pass through everything except the keys we set canonically below.
+        const rest = { ...obj };
+        delete rest.statusCode;
+        delete rest.message;
+        extra = rest;
       } else {
         message = exception.message;
       }
@@ -54,6 +63,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     const errorResponse: Record<string, unknown> = {
+      ...extra,
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,

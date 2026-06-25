@@ -3,7 +3,7 @@ import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { Job, Queue } from 'bullmq';
-import { InferenceJob, InferenceJobDocument } from '../inference-jobs/inference-job.schema';
+import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
 import { DEFAULT_JOB_OPTS, FINALIZE_JOB_QUEUE, NOTIFY_USER_QUEUE } from './queues.constants';
 
 interface JobData {

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { InferenceJob, InferenceJobDocument } from './inference-job.schema';
+import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
 import { FlowService } from '../queues/flow.service';
 import type { SubmitJobDto } from './dto/submit-job.dto';
 import { CapabilityTokenService } from '../auth/capability-token.service';

@@ -54,6 +54,34 @@ describe('HttpExceptionFilter', () => {
     expect(body.message).toBe('bad input');
   });
 
+  it('passes through structured fields on the exception response (e.g. rate-limit)', () => {
+    const filter = new HttpExceptionFilter(false);
+    const { host, response } = makeHost();
+
+    filter.catch(
+      new HttpException(
+        {
+          statusCode: 429,
+          message: 'Daily article-processing limit reached',
+          code: 'DAILY_ARTICLE_LIMIT_REACHED',
+          resetAt: '2026-06-25T00:00:00.000Z',
+          limit: 20,
+        },
+        429,
+      ),
+      host,
+    );
+
+    const body = response.json.mock.calls[0][0] as Record<string, unknown>;
+    expect(body).toMatchObject({
+      statusCode: 429,
+      code: 'DAILY_ARTICLE_LIMIT_REACHED',
+      resetAt: '2026-06-25T00:00:00.000Z',
+      limit: 20,
+      message: 'Daily article-processing limit reached',
+    });
+  });
+
   it('logs a 5xx exception at error (not warn)', () => {
     const filter = new HttpExceptionFilter(false);
     const { host, response } = makeHost();

@@ -5,7 +5,7 @@ import { Types } from 'mongoose';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest, AuthenticatedUser } from '../auth/auth.guard';
-import { InferenceJob } from './inference-job.schema';
+import { InferenceJob } from '../models/inference-job.schema';
 import { InferenceJobsController } from './inference-jobs.controller';
 import { InferenceJobsService } from './inference-jobs.service';
 
