@@ -3,10 +3,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { MongooseModule } from '@nestjs/mongoose';
 import { ChatModule } from '../chat/chat.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { InferenceJob, InferenceJobSchema } from '../models/inference-job.schema';
 import { LlmInferenceProcessor } from './llm-inference.processor';
 import { FinalizeJobProcessor } from './finalize-job.processor';
 import { NotifyUserProcessor } from './notify-user.processor';
@@ -23,7 +21,6 @@ import {
     ConfigModule,
     ChatModule,
     NotificationsModule,
-    MongooseModule.forFeature([{ name: InferenceJob.name, schema: InferenceJobSchema }]),
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
@@ -39,6 +36,9 @@ import {
             password: parsed.password || undefined,
             maxRetriesPerRequest: null,
           },
+          // Staging shares news-redis with prod; a distinct prefix keeps its
+          // queues (and Bull Board view) fully isolated from prod's.
+          prefix: config.get<string>('BULLMQ_PREFIX', 'bull'),
         };
       },
     }),

@@ -8,9 +8,9 @@ import { ChatModule } from './chat/chat.module';
 import { AttestationModule } from './attestation/attestation.module';
 import { HealthController } from './health/health.controller';
 import { InferenceJobsModule } from './inference-jobs/inference-jobs.module';
+import { JobStoreModule } from './inference-jobs/job-store.module';
 import { QueuesModule } from './queues/queues.module';
 import { NotificationsModule } from './notifications/notifications.module';
-import { DatabaseModule } from './database/database.module';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
 
@@ -104,7 +104,9 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
       ],
       inject: [ConfigService],
     }),
-    DatabaseModule,
+    // Job-store composition root: binds JOB_STORE to Mongo (default) or the
+    // dedicated Redis instance based on INFERENCE_JOBS_STORE.
+    JobStoreModule.register(),
     // Mount Bull Board at /queues. Basic-auth middleware is applied in
     // main.ts before this router handles any request, so the UI is protected.
     BullBoardModule.forRoot({

@@ -1,10 +1,8 @@
-import { Logger } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
 import type { Job } from 'bullmq';
 import { ChatService } from '../chat/chat.service';
-import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
+import { JOB_STORE, type JobResult, type JobStore } from '../inference-jobs/job-store.port';
 import { LLM_INFERENCE_QUEUE } from './queues.constants';
 
 interface JobData {
@@ -25,8 +23,7 @@ export class LlmInferenceProcessor extends WorkerHost {
 
   constructor(
     private readonly chat: ChatService,
-    @InjectModel(InferenceJob.name)
-    private readonly inferenceJobModel: Model<InferenceJobDocument>,
+    @Inject(JOB_STORE) private readonly store: JobStore,
   ) {
     super();
   }
@@ -34,14 +31,11 @@ export class LlmInferenceProcessor extends WorkerHost {
   async process(job: Job<JobData>): Promise<LlmInferenceResult> {
     const { jobId, requestIndex } = job.data;
 
-    const doc = await this.inferenceJobModel.findById(new Types.ObjectId(jobId)).lean().exec();
-    if (!doc) {
-      throw new Error(`Inference job ${jobId} not found`);
-    }
-    const request = doc.requests[requestIndex];
-    if (!request) {
+    const context = await this.store.getRequestContext(jobId, requestIndex);
+    if (!context) {
       throw new Error(`Inference job ${jobId} has no request at index ${requestIndex}`);
     }
+    const { request, sharedSystem, e2eeSession } = context;
 
     // If the job carries a sharedSystem ciphertext, prepend it as the first
     // `messages` entry before forwarding. Clients opt into this by sending
@@ -49,18 +43,11 @@ export class LlmInferenceProcessor extends WorkerHost {
     // once on the job — saves repeating the (identical) encrypted system
     // prompt across every request. Legacy jobs leave sharedSystem null and
     // embed the system inside each request's messages[] unchanged.
-    const forwardBody = maybePrependSharedSystem(request.body, doc.sharedSystem);
+    const forwardBody = maybePrependSharedSystem(request.body, sharedSystem);
 
-    const headers: Record<string, string> = {};
-    if (doc.e2eeSession) {
-      for (const [k, v] of Object.entries(doc.e2eeSession)) {
-        if (typeof v === 'string') headers[k] = v;
-      }
-    }
+    const headers: Record<string, string> = e2eeSession ? { ...e2eeSession } : {};
 
-    let result:
-      | { id: string; ok: true; response: unknown }
-      | { id: string; ok: false; error: string };
+    let result: JobResult;
 
     try {
       const upstream = await this.chat.proxyChat(forwardBody, headers);
@@ -72,32 +59,26 @@ export class LlmInferenceProcessor extends WorkerHost {
         result = {
           id: request.id,
           ok: false,
+          response: null,
           error: `upstream ${upstream.status}`,
         };
       } else {
         const json = (await upstream.json()) as unknown;
-        result = { id: request.id, ok: true, response: json };
+        result = { id: request.id, ok: true, response: json, error: null };
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(
         `jobId=${jobId} requestIndex=${requestIndex} id=${request.id} failed: ${msg}`,
       );
-      result = { id: request.id, ok: false, error: msg };
+      result = { id: request.id, ok: false, response: null, error: msg };
     }
 
-    // $push the result atomically — each child writes its own row. No read/
-    // modify/write race between concurrent children. Response body lives in
-    // Mongo, not in BullMQ's returnvalue.
-    await this.inferenceJobModel
-      .updateOne(
-        { _id: new Types.ObjectId(jobId) },
-        {
-          $push: { results: result },
-          $set: { status: 'processing' },
-        },
-      )
-      .exec();
+    // Each child records its own row keyed by requestIndex — idempotent under
+    // BullMQ's at-least-once delivery, no read/modify/write race between
+    // concurrent children. Response body lives in the job store, not in
+    // BullMQ's returnvalue.
+    await this.store.appendResult(jobId, requestIndex, result);
 
     return { id: result.id, ok: result.ok };
   }

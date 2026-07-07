@@ -1,20 +1,21 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  PayloadTooLargeException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { FlowService } from '../queues/flow.service';
 import type { SubmitJobDto } from './dto/submit-job.dto';
 import { CapabilityTokenService } from '../auth/capability-token.service';
-
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+import { JOB_STORE, JobPayloadTooLargeError, type JobStore } from './job-store.port';
 
 @Injectable()
 export class InferenceJobsService {
   private readonly logger = new Logger(InferenceJobsService.name);
 
   constructor(
-    @InjectModel(InferenceJob.name)
-    private readonly inferenceJobModel: Model<InferenceJobDocument>,
+    @Inject(JOB_STORE) private readonly store: JobStore,
     private readonly flow: FlowService,
     private readonly capabilityTokens: CapabilityTokenService,
   ) {}
@@ -23,22 +24,25 @@ export class InferenceJobsService {
     userId: string,
     dto: SubmitJobDto,
   ): Promise<{ requestId: string; capabilityToken: string }> {
-    const now = new Date();
-
-    const doc = await this.inferenceJobModel.create({
-      userId,
-      expoPushToken: dto.expoPushToken,
-      e2eeSession: dto.e2eeSession ?? null,
-      status: 'pending',
-      requests: dto.requests.map((r) => ({ id: r.id, body: r.body })),
-      sharedSystem: dto.sharedSystem ?? null,
-      results: [],
-      createdAt: now,
-      completedAt: null,
-      expiresAt: new Date(now.getTime() + DEFAULT_TTL_MS),
-    });
-
-    const requestId = doc._id.toString();
+    let requestId: string;
+    try {
+      requestId = await this.store.createJob({
+        userId,
+        expoPushToken: dto.expoPushToken ?? null,
+        e2eeSession: toHeaderRecord(dto.e2eeSession),
+        requests: dto.requests.map((r) => ({ id: r.id, body: r.body })),
+        sharedSystem: dto.sharedSystem ?? null,
+      });
+    } catch (err) {
+      if (err instanceof JobPayloadTooLargeError) {
+        throw new PayloadTooLargeException(
+          `Job payload of ${err.bytes} bytes exceeds the ${err.maxBytes}-byte limit`,
+        );
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`job store unavailable at submit: ${msg}`);
+      throw new ServiceUnavailableException('Job store unavailable');
+    }
 
     await this.flow.createInferenceFlow({
       jobId: requestId,
@@ -53,4 +57,17 @@ export class InferenceJobsService {
 
     return { requestId, capabilityToken };
   }
+}
+
+/**
+ * Collapse the optional E2EE-session DTO into the plain string record the
+ * store persists — drop undefined props, null when no header is present.
+ */
+function toHeaderRecord(session: object | undefined): Record<string, string> | null {
+  if (!session) return null;
+  const record: Record<string, string> = {};
+  for (const [k, v] of Object.entries(session)) {
+    if (typeof v === 'string') record[k] = v;
+  }
+  return Object.keys(record).length > 0 ? record : null;
 }

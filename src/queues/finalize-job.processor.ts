@@ -1,9 +1,7 @@
-import { Logger } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
 import type { Job, Queue } from 'bullmq';
-import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
+import { JOB_STORE, type JobStore } from '../inference-jobs/job-store.port';
 import { DEFAULT_JOB_OPTS, FINALIZE_JOB_QUEUE, NOTIFY_USER_QUEUE } from './queues.constants';
 
 interface JobData {
@@ -12,16 +10,15 @@ interface JobData {
 
 /**
  * BullMQ Flow parent. Fires only after all llm-inference children complete
- * (BullMQ guarantees this ordering). Marks the Mongo doc as completed and
- * hands off to the separate notify-user queue for push delivery.
+ * (BullMQ guarantees this ordering). Marks the job completed in the store
+ * and hands off to the separate notify-user queue for push delivery.
  */
 @Processor(FINALIZE_JOB_QUEUE)
 export class FinalizeJobProcessor extends WorkerHost {
   private readonly logger = new Logger(FinalizeJobProcessor.name);
 
   constructor(
-    @InjectModel(InferenceJob.name)
-    private readonly inferenceJobModel: Model<InferenceJobDocument>,
+    @Inject(JOB_STORE) private readonly store: JobStore,
     @InjectQueue(NOTIFY_USER_QUEUE)
     private readonly notifyUserQueue: Queue,
   ) {
@@ -31,21 +28,13 @@ export class FinalizeJobProcessor extends WorkerHost {
   async process(job: Job<JobData>): Promise<{ jobId: string }> {
     const { jobId } = job.data;
 
-    const updated = await this.inferenceJobModel
-      .findOneAndUpdate(
-        { _id: new Types.ObjectId(jobId) },
-        { $set: { status: 'completed', completedAt: new Date() } },
-        { returnDocument: 'after', projection: { results: 1, requests: 1 } },
-      )
-      .lean()
-      .exec();
-
-    if (!updated) {
+    const counts = await this.store.finalizeJob(jobId);
+    if (!counts) {
       throw new Error(`Inference job ${jobId} not found at finalize`);
     }
 
     this.logger.log(
-      `finalized jobId=${jobId} requests=${updated.requests.length} results=${updated.results.length}`,
+      `finalized jobId=${jobId} requests=${counts.requestCount} results=${counts.resultCount}`,
     );
 
     await this.notifyUserQueue.add('notify-user', { jobId }, DEFAULT_JOB_OPTS);

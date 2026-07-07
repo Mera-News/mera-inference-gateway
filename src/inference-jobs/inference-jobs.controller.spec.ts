@@ -1,13 +1,12 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest, AuthenticatedUser } from '../auth/auth.guard';
-import { InferenceJob } from '../models/inference-job.schema';
 import { InferenceJobsController } from './inference-jobs.controller';
 import { InferenceJobsService } from './inference-jobs.service';
+import { JOB_STORE } from './job-store.port';
 
 const VALID_ID = new Types.ObjectId().toString();
 
@@ -22,27 +21,17 @@ function makeRes(): Response {
 describe('InferenceJobsController', () => {
   let controller: InferenceJobsController;
   let jobsService: { submit: jest.Mock };
-  let modelExec: jest.Mock;
-  let inferenceJobModel: { findById: jest.Mock };
+  let store: { getResultsView: jest.Mock };
 
   beforeEach(async () => {
-    modelExec = jest.fn();
-    // findById(...).lean().exec()
-    inferenceJobModel = {
-      findById: jest.fn().mockReturnValue({
-        lean: jest.fn().mockReturnValue({ exec: modelExec }),
-      }),
-    };
+    store = { getResultsView: jest.fn() };
     jobsService = { submit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [InferenceJobsController],
       providers: [
         { provide: InferenceJobsService, useValue: jobsService },
-        {
-          provide: getModelToken(InferenceJob.name),
-          useValue: inferenceJobModel,
-        },
+        { provide: JOB_STORE, useValue: store },
       ],
     })
       // The controller is decorated with @UseGuards(AuthGuard); we exercise the
@@ -104,15 +93,24 @@ describe('InferenceJobsController', () => {
   });
 
   describe('getResults', () => {
-    it('rejects an invalid requestId', async () => {
+    it('rejects an invalid requestId before touching the store', async () => {
       const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
       await expect(controller.getResults('not-an-objectid', req, makeRes())).rejects.toThrow(
         BadRequestException,
       );
+      expect(store.getResultsView).not.toHaveBeenCalled();
+    });
+
+    it('rejects a requestId carrying redis key syntax before touching the store', async () => {
+      const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
+      await expect(controller.getResults('inf:job:*:results', req, makeRes())).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(store.getResultsView).not.toHaveBeenCalled();
     });
 
     it('returns 404 for an unknown requestId', async () => {
-      modelExec.mockResolvedValue(null);
+      store.getResultsView.mockResolvedValue(null);
       const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
       await expect(controller.getResults(VALID_ID, req, makeRes())).rejects.toThrow(
         NotFoundException,
@@ -120,7 +118,7 @@ describe('InferenceJobsController', () => {
     });
 
     it('rejects a job belonging to another user', async () => {
-      modelExec.mockResolvedValue({
+      store.getResultsView.mockResolvedValue({
         userId: 'owner',
         status: 'completed',
         results: [],
@@ -132,7 +130,7 @@ describe('InferenceJobsController', () => {
     });
 
     it('returns { pending: true } for an incomplete job', async () => {
-      modelExec.mockResolvedValue({
+      store.getResultsView.mockResolvedValue({
         userId: 'user-1',
         status: 'processing',
         results: [],
@@ -143,10 +141,10 @@ describe('InferenceJobsController', () => {
     });
 
     it('streams results for a matching owner on a completed job', async () => {
-      modelExec.mockResolvedValue({
+      store.getResultsView.mockResolvedValue({
         userId: 'user-1',
         status: 'completed',
-        results: [{ id: 'r', ok: true }],
+        results: [{ id: 'r', ok: true, response: null, error: null }],
       });
       const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
       const res = makeRes();
@@ -171,7 +169,7 @@ describe('InferenceJobsController', () => {
         await expect(controller.getResults(VALID_ID, req, makeRes())).rejects.toThrow(
           ForbiddenException,
         );
-        expect(inferenceJobModel.findById).not.toHaveBeenCalled();
+        expect(store.getResultsView).not.toHaveBeenCalled();
       });
 
       it("rejects a token whose rid doesn't match the route", async () => {
@@ -189,11 +187,11 @@ describe('InferenceJobsController', () => {
         await expect(controller.getResults(VALID_ID, req, makeRes())).rejects.toThrow(
           ForbiddenException,
         );
-        expect(inferenceJobModel.findById).not.toHaveBeenCalled();
+        expect(store.getResultsView).not.toHaveBeenCalled();
       });
 
       it('allows a token with matching rid + results:read scope', async () => {
-        modelExec.mockResolvedValue({
+        store.getResultsView.mockResolvedValue({
           userId: 'user-1',
           status: 'completed',
           results: [],
@@ -210,7 +208,7 @@ describe('InferenceJobsController', () => {
         });
         const out = await controller.getResults(VALID_ID, req, makeRes());
         expect(out).toBeDefined();
-        expect(inferenceJobModel.findById).toHaveBeenCalled();
+        expect(store.getResultsView).toHaveBeenCalled();
       });
     });
   });

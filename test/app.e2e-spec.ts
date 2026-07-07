@@ -3,7 +3,6 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import http from 'http';
-import { AppModule } from './../src/app.module';
 import { exportJWK, generateKeyPair } from 'jose';
 
 describe('InferenceGateway (e2e)', () => {
@@ -46,7 +45,12 @@ describe('InferenceGateway (e2e)', () => {
     process.env.INFERENCE_MONGODB_URI =
       process.env.MERA_E2E_MONGODB_URI ??
       'mongodb://localhost:27017/mera-inference-e2e?directConnection=true';
+    // Pin the mongo (default) backend and import AppModule only AFTER env is
+    // set: JobStoreModule.register() reads process.env at module-body import
+    // time, and redis-store.e2e-spec.ts mutates the same process env.
+    process.env.INFERENCE_JOBS_STORE = 'mongo';
 
+    const { AppModule } = require('./../src/app.module') as typeof import('./../src/app.module');
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();

@@ -1,3 +1,4 @@
+/** DEPRECATE(redis-store): removed in P4 once prod runs INFERENCE_JOBS_STORE=redis. */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 

@@ -1,24 +1,26 @@
-import { Logger } from '@nestjs/common';
+import { Logger, PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { InferenceJobsService } from './inference-jobs.service';
+import { JobPayloadTooLargeError } from './job-store.port';
 
 describe('InferenceJobsService', () => {
   let service: InferenceJobsService;
-  let oid: Types.ObjectId;
-  let modelMock: { create: jest.Mock };
+  let requestId: string;
+  let storeMock: { createJob: jest.Mock };
   let flowMock: { createInferenceFlow: jest.Mock };
   let capabilityTokensMock: { mint: jest.Mock };
 
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
-    oid = new Types.ObjectId();
-    modelMock = { create: jest.fn().mockResolvedValue({ _id: oid }) };
+    requestId = new Types.ObjectId().toString();
+    storeMock = { createJob: jest.fn().mockResolvedValue(requestId) };
     flowMock = { createInferenceFlow: jest.fn().mockResolvedValue(undefined) };
     capabilityTokensMock = { mint: jest.fn().mockReturnValue('mc.tok') };
 
     service = new InferenceJobsService(
-      modelMock as never,
+      storeMock as never,
       flowMock as never,
       capabilityTokensMock as never,
     );
@@ -39,27 +41,20 @@ describe('InferenceJobsService', () => {
   };
 
   describe('submit — full dto', () => {
-    it('calls model.create with the correct document shape', async () => {
+    it('calls store.createJob with the correct input shape', async () => {
       await service.submit('user-1', fullDto as never);
 
-      expect(modelMock.create).toHaveBeenCalledTimes(1);
-      const arg = modelMock.create.mock.calls[0][0] as Record<string, unknown>;
-
-      expect(arg).toMatchObject({
+      expect(storeMock.createJob).toHaveBeenCalledTimes(1);
+      expect(storeMock.createJob).toHaveBeenCalledWith({
         userId: 'user-1',
-        status: 'pending',
+        expoPushToken: 'ExponentPushToken[t]',
+        e2eeSession: { 'X-Signing-Algo': 'ed' },
         requests: [
           { id: 'a', body: { x: 1 } },
           { id: 'b', body: {} },
         ],
-        e2eeSession: { 'X-Signing-Algo': 'ed' },
         sharedSystem: 'CIPHER',
-        results: [],
-        expoPushToken: 'ExponentPushToken[t]',
       });
-
-      expect(arg.createdAt).toBeInstanceOf(Date);
-      expect(arg.expiresAt).toBeInstanceOf(Date);
     });
 
     it('calls flow.createInferenceFlow with jobId and requestCount', async () => {
@@ -67,7 +62,7 @@ describe('InferenceJobsService', () => {
 
       expect(flowMock.createInferenceFlow).toHaveBeenCalledTimes(1);
       expect(flowMock.createInferenceFlow).toHaveBeenCalledWith({
-        jobId: oid.toString(),
+        jobId: requestId,
         requestCount: 2,
       });
     });
@@ -78,7 +73,7 @@ describe('InferenceJobsService', () => {
       expect(capabilityTokensMock.mint).toHaveBeenCalledTimes(1);
       expect(capabilityTokensMock.mint).toHaveBeenCalledWith({
         userId: 'user-1',
-        requestId: oid.toString(),
+        requestId,
       });
     });
 
@@ -86,36 +81,57 @@ describe('InferenceJobsService', () => {
       const result = await service.submit('user-1', fullDto as never);
 
       expect(result).toEqual({
-        requestId: oid.toString(),
+        requestId,
         capabilityToken: 'mc.tok',
       });
     });
   });
 
-  describe('submit — e2eeSession and sharedSystem undefined', () => {
-    it('passes e2eeSession: null and sharedSystem: null to model.create', async () => {
+  describe('submit — optional fields absent', () => {
+    it('passes nulls for expoPushToken, e2eeSession and sharedSystem', async () => {
       const dtoWithoutOptionals = {
         requests: [{ id: 'a', body: { x: 1 } }],
-        expoPushToken: 'ExponentPushToken[t]',
       };
 
       await service.submit('user-1', dtoWithoutOptionals as never);
 
-      const arg = modelMock.create.mock.calls[0][0] as Record<string, unknown>;
+      const arg = storeMock.createJob.mock.calls[0][0] as Record<string, unknown>;
+      expect(arg.expoPushToken).toBeNull();
       expect(arg.e2eeSession).toBeNull();
       expect(arg.sharedSystem).toBeNull();
     });
+
+    it('collapses an e2eeSession with only undefined props to null', async () => {
+      const dto = {
+        requests: [{ id: 'a', body: {} }],
+        e2eeSession: { 'X-Signing-Algo': undefined },
+      };
+
+      await service.submit('user-1', dto as never);
+
+      const arg = storeMock.createJob.mock.calls[0][0] as Record<string, unknown>;
+      expect(arg.e2eeSession).toBeNull();
+    });
   });
 
-  describe('submit — TTL', () => {
-    it('sets expiresAt exactly 24 hours after createdAt', async () => {
-      await service.submit('user-1', fullDto as never);
+  describe('submit — store failures', () => {
+    it('maps JobPayloadTooLargeError to 413 PayloadTooLargeException', async () => {
+      storeMock.createJob.mockRejectedValue(new JobPayloadTooLargeError(10_000_000, 5_242_880));
 
-      const arg = modelMock.create.mock.calls[0][0] as Record<string, unknown>;
-      const createdAt = arg.createdAt as Date;
-      const expiresAt = arg.expiresAt as Date;
+      await expect(service.submit('user-1', fullDto as never)).rejects.toThrow(
+        PayloadTooLargeException,
+      );
+      expect(flowMock.createInferenceFlow).not.toHaveBeenCalled();
+      expect(capabilityTokensMock.mint).not.toHaveBeenCalled();
+    });
 
-      expect(expiresAt.getTime() - createdAt.getTime()).toBe(24 * 60 * 60 * 1000);
+    it('maps any other store error to 503 ServiceUnavailableException', async () => {
+      storeMock.createJob.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(service.submit('user-1', fullDto as never)).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+      expect(flowMock.createInferenceFlow).not.toHaveBeenCalled();
     });
   });
 });

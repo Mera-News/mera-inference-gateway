@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Get,
   HttpCode,
+  Inject,
   Logger,
   NotFoundException,
   Param,
@@ -14,15 +15,14 @@ import {
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Types } from 'mongoose';
 import type { Response } from 'express';
 import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { InferenceJobsService } from './inference-jobs.service';
-import { InferenceJob, InferenceJobDocument } from '../models/inference-job.schema';
 import { SubmitJobDto } from './dto/submit-job.dto';
+import { JOB_STORE, type JobStore } from './job-store.port';
 
 @Controller('v1/inference')
 @UseGuards(AuthGuard)
@@ -31,8 +31,7 @@ export class InferenceJobsController {
 
   constructor(
     private readonly jobs: InferenceJobsService,
-    @InjectModel(InferenceJob.name)
-    private readonly inferenceJobModel: Model<InferenceJobDocument>,
+    @Inject(JOB_STORE) private readonly store: JobStore,
   ) {}
 
   @Post('jobs')
@@ -58,6 +57,9 @@ export class InferenceJobsController {
     @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile | { pending: true }> {
+    // Both backends mint 24-hex ids (ObjectId / randomBytes). Validating the
+    // shape up front also guarantees the id can never smuggle key-syntax
+    // characters into the store lookup.
     if (!Types.ObjectId.isValid(requestId)) {
       throw new BadRequestException('Invalid requestId');
     }
@@ -75,32 +77,25 @@ export class InferenceJobsController {
       }
     }
 
-    const doc = await this.inferenceJobModel
-      .findById(new Types.ObjectId(requestId), {
-        userId: 1,
-        status: 1,
-        results: 1,
-      })
-      .lean()
-      .exec();
+    const view = await this.store.getResultsView(requestId);
 
-    if (!doc) {
+    if (!view) {
       throw new NotFoundException('Unknown requestId');
     }
-    if (doc.userId !== req.user.id) {
+    if (view.userId !== req.user.id) {
       throw new ForbiddenException();
     }
-    if (doc.status !== 'completed') {
+    if (view.status !== 'completed') {
       return { pending: true };
     }
 
     const raw = JSON.stringify({
       requestId,
-      results: doc.results ?? [],
+      results: view.results,
     });
 
-    // Do NOT delete on fetch — the TTL index handles cleanup after 24h, and
-    // keeping the doc available for the window lets the client's foreground
+    // Do NOT delete on fetch — the store's TTL handles cleanup after 24h, and
+    // keeping the job available for the window lets the client's foreground
     // reconcile refetch safely if mid-parse it crashes.
     res.setHeader('Cache-Control', 'no-store');
 

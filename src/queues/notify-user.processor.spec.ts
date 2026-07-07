@@ -22,12 +22,8 @@ import type { ExpoPushService } from '../notifications/expo-push.service';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeModel(doc: unknown) {
-  return {
-    findById: jest.fn().mockReturnValue({
-      lean: () => ({ exec: jest.fn().mockResolvedValue(doc) }),
-    }),
-  };
+function makeStore(info: { expoPushToken: string | null } | null) {
+  return { getNotifyInfo: jest.fn().mockResolvedValue(info) };
 }
 
 function makeJob(jobId: string): Job<{ jobId: string }> {
@@ -56,21 +52,20 @@ describe('NotifyUserProcessor', () => {
     jest.restoreAllMocks();
   });
 
-  it('rejects with an error matching /not found at notify-user/ when the doc is not found', async () => {
+  it('rejects with an error matching /not found at notify-user/ when the job is unknown', async () => {
     const jobId = new Types.ObjectId().toString();
-    const model = makeModel(null);
+    const store = makeStore(null);
     const push = makePush();
-    const processor = new NotifyUserProcessor(model as never, push as never);
+    const processor = new NotifyUserProcessor(store as never, push as never);
 
     await expect(processor.process(makeJob(jobId))).rejects.toThrow(/not found at notify-user/);
   });
 
   it('logs skip, returns { ok: true }, and does NOT call push.sendSilent when expoPushToken is null', async () => {
     const jobId = new Types.ObjectId().toString();
-    const doc = { expoPushToken: null };
-    const model = makeModel(doc);
+    const store = makeStore({ expoPushToken: null });
     const push = makePush();
-    const processor = new NotifyUserProcessor(model as never, push as never);
+    const processor = new NotifyUserProcessor(store as never, push as never);
 
     const result = await processor.process(makeJob(jobId));
 
@@ -81,10 +76,9 @@ describe('NotifyUserProcessor', () => {
 
   it('calls push.sendSilent with the correct args and returns { ok: true } for a valid token', async () => {
     const jobId = new Types.ObjectId().toString();
-    const doc = { expoPushToken: 'ExponentPushToken[x]' };
-    const model = makeModel(doc);
+    const store = makeStore({ expoPushToken: 'ExponentPushToken[x]' });
     const push = makePush();
-    const processor = new NotifyUserProcessor(model as never, push as never);
+    const processor = new NotifyUserProcessor(store as never, push as never);
 
     const result = await processor.process(makeJob(jobId));
 
@@ -96,23 +90,15 @@ describe('NotifyUserProcessor', () => {
     });
   });
 
-  it('calls findById with an ObjectId and the { expoPushToken: 1 } projection', async () => {
+  it('calls store.getNotifyInfo with the jobId', async () => {
     const jobId = new Types.ObjectId().toString();
-    const doc = { expoPushToken: 'ExponentPushToken[x]' };
-    const model = makeModel(doc);
+    const store = makeStore({ expoPushToken: 'ExponentPushToken[x]' });
     const push = makePush();
-    const processor = new NotifyUserProcessor(model as never, push as never);
+    const processor = new NotifyUserProcessor(store as never, push as never);
 
     await processor.process(makeJob(jobId));
 
-    expect(model.findById).toHaveBeenCalledTimes(1);
-    const [idArg, projectionArg] = model.findById.mock.calls[0] as [Types.ObjectId, unknown];
-
-    // The argument should be an ObjectId instance.
-    expect(idArg).toBeInstanceOf(Types.ObjectId);
-    // And it should represent the same jobId that was passed in.
-    expect(idArg.toString()).toBe(jobId);
-
-    expect(projectionArg).toEqual({ expoPushToken: 1 });
+    expect(store.getNotifyInfo).toHaveBeenCalledTimes(1);
+    expect(store.getNotifyInfo).toHaveBeenCalledWith(jobId);
   });
 });

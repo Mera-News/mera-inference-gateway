@@ -2,10 +2,11 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 
+/** DEPRECATE(redis-store): removed in P4 once prod runs INFERENCE_JOBS_STORE=redis. */
 /**
  * Dedicated Mongo connection for the inference gateway. Separate URI from the
  * main news-graphql MongoDB — this DB only holds ephemeral inference_jobs
- * documents (TTL 24h).
+ * documents (TTL 24h). Only imported by JobStoreModule's mongo branch.
  */
 @Module({
   imports: [

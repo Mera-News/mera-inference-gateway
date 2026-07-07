@@ -1,15 +1,12 @@
 import { Module } from '@nestjs/common';
-import { MongooseModule } from '@nestjs/mongoose';
 import { InferenceJobsController } from './inference-jobs.controller';
 import { InferenceJobsService } from './inference-jobs.service';
-import { InferenceJob, InferenceJobSchema } from '../models/inference-job.schema';
 import { QueuesModule } from '../queues/queues.module';
 
+// JOB_STORE is provided by the global JobStoreModule (composition root in
+// app.module.ts), so no storage imports here.
 @Module({
-  imports: [
-    MongooseModule.forFeature([{ name: InferenceJob.name, schema: InferenceJobSchema }]),
-    QueuesModule,
-  ],
+  imports: [QueuesModule],
   controllers: [InferenceJobsController],
   providers: [InferenceJobsService],
 })

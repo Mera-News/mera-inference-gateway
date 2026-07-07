@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { LlmInferenceProcessor } from './llm-inference.processor';
+import type { RequestContext } from '../inference-jobs/job-store.port';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,35 +27,21 @@ function makeJob(jobId: string, requestIndex: number): FakeJob {
   return { data: { jobId, requestIndex } };
 }
 
-// Minimal lean InferenceJob document shape used across tests.
-function makeDoc(overrides: Record<string, unknown> = {}) {
+// Minimal RequestContext shape used across tests.
+function makeContext(overrides: Partial<RequestContext> = {}): RequestContext {
   return {
-    requests: [{ id: 'r0', body: { messages: [{ role: 'user', content: 'x' }] } }],
+    request: { id: 'r0', body: { messages: [{ role: 'user', content: 'x' }] } },
     e2eeSession: null,
     sharedSystem: null,
     ...overrides,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Model mock factory — returns a fresh instance for each test so mocks are
-// independent across tests.
-// ---------------------------------------------------------------------------
-
-function makeModelMock(doc: unknown) {
-  const updateOneExec = jest.fn().mockResolvedValue({});
-  const findByIdExec = jest.fn().mockResolvedValue(doc);
-
-  const modelMock = {
-    findById: jest.fn().mockReturnValue({
-      lean: () => ({ exec: findByIdExec }),
-    }),
-    updateOne: jest.fn().mockReturnValue({ exec: updateOneExec }),
-    _findByIdExec: findByIdExec,
-    _updateOneExec: updateOneExec,
+function makeStoreMock(context: RequestContext | null) {
+  return {
+    getRequestContext: jest.fn().mockResolvedValue(context),
+    appendResult: jest.fn().mockResolvedValue(undefined),
   };
-
-  return modelMock;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,47 +62,32 @@ describe('LlmInferenceProcessor', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 1. doc not found
+  // 1. missing context (unknown job OR out-of-bounds index — the store
+  //    returns null for both)
   // -------------------------------------------------------------------------
 
-  it('rejects with "not found" when the document does not exist', async () => {
-    const modelMock = makeModelMock(null);
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+  it('rejects when the store has no request for the (jobId, index)', async () => {
+    const storeMock = makeStoreMock(null);
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
-    const job = makeJob(jobId, 0);
-
-    await expect(processor.process(job as never)).rejects.toThrow(/not found/);
-    expect(chatMock.proxyChat).not.toHaveBeenCalled();
-    expect(modelMock.updateOne).not.toHaveBeenCalled();
-  });
-
-  // -------------------------------------------------------------------------
-  // 2. request index out of bounds
-  // -------------------------------------------------------------------------
-
-  it('rejects with "has no request at index" when requestIndex is out of bounds', async () => {
-    const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
-    const jobId = new Types.ObjectId().toString();
-    // requests has 1 entry (index 0); request index 99 is missing.
     const job = makeJob(jobId, 99);
 
     await expect(processor.process(job as never)).rejects.toThrow(/has no request at index/);
     expect(chatMock.proxyChat).not.toHaveBeenCalled();
-    expect(modelMock.updateOne).not.toHaveBeenCalled();
+    expect(storeMock.appendResult).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
-  // 3. SUCCESS path
+  // 2. SUCCESS path
   // -------------------------------------------------------------------------
 
-  it('returns { id, ok:true } and writes the result to Mongo on success', async () => {
+  it('returns { id, ok:true } and appends the result to the store on success', async () => {
     const jsonResponse = { choices: [] };
     const upstream = makeResponse({ ok: true, jsonValue: jsonResponse });
     chatMock.proxyChat.mockResolvedValue(upstream);
 
-    const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(makeContext());
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -132,35 +104,26 @@ describe('LlmInferenceProcessor', () => {
     });
     expect(calledHeaders).toEqual({});
 
-    // updateOne called with correct filter and update
-    expect(modelMock.updateOne).toHaveBeenCalledTimes(1);
-    const [filter, update] = modelMock.updateOne.mock.calls[0] as [
-      { _id: Types.ObjectId },
-      {
-        $push: { results: { id: string; ok: boolean; response: unknown } };
-        $set: { status: string };
-      },
-    ];
-    expect(filter._id).toBeInstanceOf(Types.ObjectId);
-    expect(filter._id.toString()).toBe(jobId);
-    expect(update.$push.results).toEqual({
+    // appendResult called with the jobId, index, and a fully-normalized result
+    expect(storeMock.appendResult).toHaveBeenCalledTimes(1);
+    expect(storeMock.appendResult).toHaveBeenCalledWith(jobId, 0, {
       id: 'r0',
       ok: true,
       response: jsonResponse,
+      error: null,
     });
-    expect(update.$set.status).toBe('processing');
   });
 
   // -------------------------------------------------------------------------
-  // 4. UPSTREAM NOT OK (non-2xx response)
+  // 3. UPSTREAM NOT OK (non-2xx response)
   // -------------------------------------------------------------------------
 
-  it('pushes ok:false result and returns ok:false when upstream is not ok', async () => {
+  it('appends ok:false result and returns ok:false when upstream is not ok', async () => {
     const upstream = makeResponse({ ok: false, status: 500, textValue: 'err body' });
     chatMock.proxyChat.mockResolvedValue(upstream);
 
-    const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(makeContext());
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
@@ -172,105 +135,95 @@ describe('LlmInferenceProcessor', () => {
     // Return value
     expect(result).toEqual({ id: 'r0', ok: false });
 
-    // updateOne result shape
-    const [, update] = modelMock.updateOne.mock.calls[0] as [
-      unknown,
-      { $push: { results: { id: string; ok: boolean; error: string } } },
-    ];
-    expect(update.$push.results).toEqual({
+    expect(storeMock.appendResult).toHaveBeenCalledWith(jobId, 0, {
       id: 'r0',
       ok: false,
+      response: null,
       error: 'upstream 500',
     });
   });
 
   // -------------------------------------------------------------------------
-  // 5a. proxyChat THROWS an Error instance
+  // 4a. proxyChat THROWS an Error instance
   // -------------------------------------------------------------------------
 
-  it('pushes ok:false with err.message and returns ok:false when proxyChat throws an Error', async () => {
+  it('appends ok:false with err.message and returns ok:false when proxyChat throws an Error', async () => {
     chatMock.proxyChat.mockRejectedValue(new Error('boom'));
 
-    const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(makeContext());
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
     const result = await processor.process(job as never);
 
     expect(result).toEqual({ id: 'r0', ok: false });
-
-    const [, update] = modelMock.updateOne.mock.calls[0] as [
-      unknown,
-      { $push: { results: { id: string; ok: boolean; error: string } } },
-    ];
-    expect(update.$push.results).toEqual({ id: 'r0', ok: false, error: 'boom' });
+    expect(storeMock.appendResult).toHaveBeenCalledWith(jobId, 0, {
+      id: 'r0',
+      ok: false,
+      response: null,
+      error: 'boom',
+    });
   });
 
   // -------------------------------------------------------------------------
-  // 5b. proxyChat THROWS a non-Error (String coercion)
+  // 4b. proxyChat THROWS a non-Error (String coercion)
   // -------------------------------------------------------------------------
 
-  it('pushes ok:false with String(err) when proxyChat throws a non-Error value', async () => {
+  it('appends ok:false with String(err) when proxyChat throws a non-Error value', async () => {
     chatMock.proxyChat.mockRejectedValue('weird');
 
-    const modelMock = makeModelMock(makeDoc());
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(makeContext());
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
     const job = makeJob(jobId, 0);
 
     const result = await processor.process(job as never);
 
     expect(result).toEqual({ id: 'r0', ok: false });
-
-    const [, update] = modelMock.updateOne.mock.calls[0] as [
-      unknown,
-      { $push: { results: { id: string; ok: boolean; error: string } } },
-    ];
-    expect(update.$push.results).toEqual({ id: 'r0', ok: false, error: 'weird' });
+    expect(storeMock.appendResult).toHaveBeenCalledWith(jobId, 0, {
+      id: 'r0',
+      ok: false,
+      response: null,
+      error: 'weird',
+    });
   });
 
   // -------------------------------------------------------------------------
-  // 6. E2EE HEADERS — only string values forwarded
+  // 5. E2EE HEADERS — forwarded verbatim from the store's (already string-
+  //    filtered) session record
   // -------------------------------------------------------------------------
 
-  it('forwards only string-valued e2eeSession headers to proxyChat', async () => {
+  it('forwards the e2eeSession record as upstream headers', async () => {
     const upstream = makeResponse({ ok: true, jsonValue: { choices: [] } });
     chatMock.proxyChat.mockResolvedValue(upstream);
 
-    const e2eeSession = {
-      'X-Signing-Algo': 'ed25519',
-      'X-Bad': 123, // number — must be dropped
-    };
-    const modelMock = makeModelMock(makeDoc({ e2eeSession }));
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(makeContext({ e2eeSession: { 'X-Signing-Algo': 'ed25519' } }));
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
-    const job = makeJob(jobId, 0);
 
-    await processor.process(job as never);
+    await processor.process(makeJob(jobId, 0) as never);
 
     const [, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [unknown, Record<string, string>];
     expect(calledHeaders).toEqual({ 'X-Signing-Algo': 'ed25519' });
-    expect(calledHeaders).not.toHaveProperty('X-Bad');
   });
 
   it('passes an empty headers object when e2eeSession is null', async () => {
     const upstream = makeResponse({ ok: true, jsonValue: { choices: [] } });
     chatMock.proxyChat.mockResolvedValue(upstream);
 
-    const modelMock = makeModelMock(makeDoc({ e2eeSession: null }));
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(makeContext({ e2eeSession: null }));
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
-    const job = makeJob(jobId, 0);
 
-    await processor.process(job as never);
+    await processor.process(makeJob(jobId, 0) as never);
 
     const [, calledHeaders] = chatMock.proxyChat.mock.calls[0] as [unknown, Record<string, string>];
     expect(calledHeaders).toEqual({});
   });
 
   // -------------------------------------------------------------------------
-  // 7. SHARED SYSTEM — prepend behaviour
+  // 6. SHARED SYSTEM — prepend behaviour
   // -------------------------------------------------------------------------
 
   it('prepends sharedSystem as system message and does NOT mutate the original body', async () => {
@@ -278,16 +231,16 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const originalMessages = [{ role: 'user', content: 'x' }];
-    const doc = makeDoc({
-      requests: [{ id: 'r0', body: { messages: originalMessages } }],
-      sharedSystem: 'CIPHER',
-    });
-    const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(
+      makeContext({
+        request: { id: 'r0', body: { messages: originalMessages } },
+        sharedSystem: 'CIPHER',
+      }),
+    );
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
-    const job = makeJob(jobId, 0);
 
-    await processor.process(job as never);
+    await processor.process(makeJob(jobId, 0) as never);
 
     const [calledBody] = chatMock.proxyChat.mock.calls[0] as [
       { messages: Array<{ role: string; content: unknown }> },
@@ -300,7 +253,7 @@ describe('LlmInferenceProcessor', () => {
     expect(calledBody.messages[1]).toEqual({ role: 'user', content: 'x' });
     expect(calledBody.messages).toHaveLength(2);
 
-    // Original doc body must NOT be mutated
+    // Original body must NOT be mutated
     expect(originalMessages).toHaveLength(1);
     expect(originalMessages[0].role).toBe('user');
   });
@@ -310,16 +263,13 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const originalBody = { messages: [{ role: 'user', content: 'x' }] };
-    const doc = makeDoc({
-      requests: [{ id: 'r0', body: originalBody }],
-      sharedSystem: null,
-    });
-    const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(
+      makeContext({ request: { id: 'r0', body: originalBody }, sharedSystem: null }),
+    );
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
-    const job = makeJob(jobId, 0);
 
-    await processor.process(job as never);
+    await processor.process(makeJob(jobId, 0) as never);
 
     const [calledBody] = chatMock.proxyChat.mock.calls[0] as [unknown, unknown];
     // Same reference — no cloning when sharedSystem is absent
@@ -331,16 +281,13 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const originalBody = { prompt: 'x' }; // no messages array
-    const doc = makeDoc({
-      requests: [{ id: 'r0', body: originalBody }],
-      sharedSystem: 'CIPHER',
-    });
-    const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(
+      makeContext({ request: { id: 'r0', body: originalBody }, sharedSystem: 'CIPHER' }),
+    );
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
-    const job = makeJob(jobId, 0);
 
-    await processor.process(job as never);
+    await processor.process(makeJob(jobId, 0) as never);
 
     const [calledBody] = chatMock.proxyChat.mock.calls[0] as [unknown, unknown];
     // Same reference — maybePrependSharedSystem returns body untouched
@@ -352,12 +299,13 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const originalBody = { messages: [{ role: 'user', content: 'x' }] };
-    const doc = makeDoc({
-      requests: [{ id: 'r0', body: originalBody }],
-      sharedSystem: '', // falsy — the `!sharedSystem` guard must short-circuit
-    });
-    const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(
+      makeContext({
+        request: { id: 'r0', body: originalBody },
+        sharedSystem: '', // falsy — the `!sharedSystem` guard must short-circuit
+      }),
+    );
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
 
     await processor.process(makeJob(jobId, 0) as never);
@@ -371,12 +319,13 @@ describe('LlmInferenceProcessor', () => {
     chatMock.proxyChat.mockResolvedValue(upstream);
 
     const originalMessages: Array<{ role: string; content: unknown }> = [];
-    const doc = makeDoc({
-      requests: [{ id: 'r0', body: { messages: originalMessages } }],
-      sharedSystem: 'CIPHER',
-    });
-    const modelMock = makeModelMock(doc);
-    const processor = new LlmInferenceProcessor(chatMock as never, modelMock as never);
+    const storeMock = makeStoreMock(
+      makeContext({
+        request: { id: 'r0', body: { messages: originalMessages } },
+        sharedSystem: 'CIPHER',
+      }),
+    );
+    const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
     const jobId = new Types.ObjectId().toString();
 
     await processor.process(makeJob(jobId, 0) as never);
