@@ -15,7 +15,6 @@ import {
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
-import { Types } from 'mongoose';
 import type { Response } from 'express';
 import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
@@ -57,10 +56,10 @@ export class InferenceJobsController {
     @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile | { pending: true }> {
-    // Both backends mint 24-hex ids (ObjectId / randomBytes). Validating the
-    // shape up front also guarantees the id can never smuggle key-syntax
-    // characters into the store lookup.
-    if (!Types.ObjectId.isValid(requestId)) {
+    // The store mints 24-hex ids (crypto.randomBytes). Validating the shape up
+    // front also guarantees the id can never smuggle key-syntax characters into
+    // the store lookup.
+    if (!/^[0-9a-f]{24}$/.test(requestId)) {
       throw new BadRequestException('Invalid requestId');
     }
 

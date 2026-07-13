@@ -30,25 +30,19 @@ describe('InferenceGateway (e2e)', () => {
     // Valid 32-byte hex secret — the .env.example placeholder is not hex and
     // would make CapabilityTokenService.onModuleInit throw at boot.
     process.env.INFERENCE_CAPABILITY_SECRET = 'a'.repeat(64);
-    // AppModule opens these connections on boot (Mongoose blocks init until it
-    // connects). The GitHub workflow provisions redis + mongo service containers
-    // on these localhost ports. Pin to localhost (hard-set, not ??=) so a stray
-    // INFERENCE_MONGODB_URI in the dev's shell — e.g. an Atlas URI from .env —
-    // can't redirect the e2e at a remote, IP-whitelisted cluster. E2E is always
-    // meant to run against the ephemeral local/CI services. Override via
-    // MERA_E2E_* if 27017/6379 are taken locally.
+    // AppModule opens Redis connections on boot (BullMQ + the job store). The
+    // GitHub workflow provisions a redis service container on this localhost
+    // port. Pin to localhost (hard-set, not ??=) so a stray URL in the dev's
+    // shell can't redirect the e2e at a remote instance. E2E is always meant to
+    // run against the ephemeral local/CI services. Override via MERA_E2E_* if
+    // 6379 is taken locally.
     process.env.INFERENCE_REDIS_URL = process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
-    // directConnection=true: a single-node replica set (common in Docker) can
-    // advertise an internal container hostname the host can't resolve; this
-    // tells the driver to talk to the given host directly without topology
-    // discovery.
-    process.env.INFERENCE_MONGODB_URI =
-      process.env.MERA_E2E_MONGODB_URI ??
-      'mongodb://localhost:27017/mera-inference-e2e?directConnection=true';
-    // Pin the mongo (default) backend and import AppModule only AFTER env is
-    // set: JobStoreModule.register() reads process.env at module-body import
-    // time, and redis-store.e2e-spec.ts mutates the same process env.
-    process.env.INFERENCE_JOBS_STORE = 'mongo';
+    // Job payloads/results live on the dedicated job-store Redis (same
+    // container here). Import AppModule only AFTER env is set:
+    // JobStoreModule.register() reads process.env at module-body import time,
+    // and redis-store.e2e-spec.ts mutates the same process env.
+    process.env.INFERENCE_JOBS_REDIS_URL =
+      process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
 
     const { AppModule } = require('./../src/app.module') as typeof import('./../src/app.module');
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -58,8 +52,8 @@ describe('InferenceGateway (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
     await app.init();
-    // app.init() establishes the Mongoose connection and starts BullMQ workers,
-    // which exceeds jest's default 5s hook budget on a cold connection.
+    // app.init() connects to Redis and starts BullMQ workers, which exceeds
+    // jest's default 5s hook budget on a cold connection.
   }, 30_000);
 
   afterAll(async () => {

@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { Types } from 'mongoose';
+import { randomBytes } from 'node:crypto';
 import { LlmInferenceProcessor } from './llm-inference.processor';
 import type { RequestContext } from '../inference-jobs/job-store.port';
 
@@ -69,7 +69,7 @@ describe('LlmInferenceProcessor', () => {
   it('rejects when the store has no request for the (jobId, index)', async () => {
     const storeMock = makeStoreMock(null);
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const job = makeJob(jobId, 99);
 
     await expect(processor.process(job as never)).rejects.toThrow(/has no request at index/);
@@ -88,7 +88,7 @@ describe('LlmInferenceProcessor', () => {
 
     const storeMock = makeStoreMock(makeContext());
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const job = makeJob(jobId, 0);
 
     const result = await processor.process(job as never);
@@ -124,7 +124,7 @@ describe('LlmInferenceProcessor', () => {
 
     const storeMock = makeStoreMock(makeContext());
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const job = makeJob(jobId, 0);
 
     const result = await processor.process(job as never);
@@ -152,7 +152,7 @@ describe('LlmInferenceProcessor', () => {
 
     const storeMock = makeStoreMock(makeContext());
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const job = makeJob(jobId, 0);
 
     const result = await processor.process(job as never);
@@ -175,7 +175,7 @@ describe('LlmInferenceProcessor', () => {
 
     const storeMock = makeStoreMock(makeContext());
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const job = makeJob(jobId, 0);
 
     const result = await processor.process(job as never);
@@ -200,7 +200,7 @@ describe('LlmInferenceProcessor', () => {
 
     const storeMock = makeStoreMock(makeContext({ e2eeSession: { 'X-Signing-Algo': 'ed25519' } }));
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 
@@ -214,7 +214,7 @@ describe('LlmInferenceProcessor', () => {
 
     const storeMock = makeStoreMock(makeContext({ e2eeSession: null }));
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 
@@ -238,7 +238,7 @@ describe('LlmInferenceProcessor', () => {
       }),
     );
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 
@@ -267,7 +267,7 @@ describe('LlmInferenceProcessor', () => {
       makeContext({ request: { id: 'r0', body: originalBody }, sharedSystem: null }),
     );
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 
@@ -285,7 +285,7 @@ describe('LlmInferenceProcessor', () => {
       makeContext({ request: { id: 'r0', body: originalBody }, sharedSystem: 'CIPHER' }),
     );
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 
@@ -306,7 +306,7 @@ describe('LlmInferenceProcessor', () => {
       }),
     );
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 
@@ -326,7 +326,7 @@ describe('LlmInferenceProcessor', () => {
       }),
     );
     const processor = new LlmInferenceProcessor(chatMock as never, storeMock as never);
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
 
     await processor.process(makeJob(jobId, 0) as never);
 

@@ -1,8 +1,7 @@
 /**
- * Storage port for the async inference-job buffer. Two adapters exist:
- * MongoJobStore (legacy, Atlas TTL collection) and RedisJobStore (dedicated
- * Memorystore instance). The composition root (JobStoreModule) binds one of
- * them from INFERENCE_JOBS_STORE; everything else — controller, service,
+ * Storage port for the async inference-job buffer. One adapter exists:
+ * RedisJobStore (dedicated Memorystore instance). The composition root
+ * (JobStoreModule) binds it; everything else — controller, service,
  * processors — depends only on this interface.
  *
  * Access-control invariant: every view that can reach a client response

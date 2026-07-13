@@ -5,9 +5,8 @@
  *
  * The queues module import graph reaches expo-server-sdk (via
  * NotificationsModule), the processor files that use @nestjs/bullmq
- * decorators, ChatModule, and the Mongoose schema helpers.  We stub all of
- * those at the module level so only QueuesModule's own factory logic runs
- * under test.
+ * decorators, and ChatModule.  We stub all of those at the module level so
+ * only QueuesModule's own factory logic runs under test.
  */
 
 // ---------------------------------------------------------------------------
@@ -74,26 +73,7 @@ jest.mock('@bull-board/api/bullMQAdapter', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// 6. @nestjs/mongoose stub (schema decorators + forFeature)
-// ---------------------------------------------------------------------------
-jest.mock('@nestjs/mongoose', () => ({
-  MongooseModule: {
-    forRootAsync: (opts: any) => {
-      mockCapture.mongoFactory = opts.useFactory;
-      return { module: class MongooseRootStub {} };
-    },
-    forFeature: () => ({ module: class MongooseFeatureStub {} }),
-  },
-  InjectModel: () => () => {},
-  Prop: () => () => {},
-  Schema: () => () => {},
-  SchemaFactory: {
-    createForClass: () => ({}),
-  },
-}));
-
-// ---------------------------------------------------------------------------
-// 7. Stub heavy submodules so we don't compile their entire trees
+// 6. Stub heavy submodules so we don't compile their entire trees
 // ---------------------------------------------------------------------------
 jest.mock('../chat/chat.module', () => ({ ChatModule: class ChatModuleStub {} }));
 jest.mock('../notifications/notifications.module', () => ({
@@ -101,7 +81,7 @@ jest.mock('../notifications/notifications.module', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// 8. Stub processor files and FlowService to plain classes.
+// 7. Stub processor files and FlowService to plain classes.
 //    This avoids issues with decorator resolution at import time.
 // ---------------------------------------------------------------------------
 jest.mock('./llm-inference.processor', () => ({
@@ -115,15 +95,6 @@ jest.mock('./notify-user.processor', () => ({
 }));
 jest.mock('./flow.service', () => ({
   FlowService: class FlowServiceStub {},
-}));
-
-// ---------------------------------------------------------------------------
-// 9. Stub inference-job schema (pulled by processor stubs' original imports
-//    when not fully mocked, and by the module itself via forFeature)
-// ---------------------------------------------------------------------------
-jest.mock('../models/inference-job.schema', () => ({
-  InferenceJob: { name: 'InferenceJob' },
-  InferenceJobSchema: {},
 }));
 
 // ---------------------------------------------------------------------------

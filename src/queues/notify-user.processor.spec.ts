@@ -13,7 +13,7 @@ jest.mock('expo-server-sdk', () => {
 });
 
 import { Logger } from '@nestjs/common';
-import { Types } from 'mongoose';
+import { randomBytes } from 'node:crypto';
 import type { Job } from 'bullmq';
 import { NotifyUserProcessor } from './notify-user.processor';
 import type { ExpoPushService } from '../notifications/expo-push.service';
@@ -53,7 +53,7 @@ describe('NotifyUserProcessor', () => {
   });
 
   it('rejects with an error matching /not found at notify-user/ when the job is unknown', async () => {
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const store = makeStore(null);
     const push = makePush();
     const processor = new NotifyUserProcessor(store as never, push as never);
@@ -62,7 +62,7 @@ describe('NotifyUserProcessor', () => {
   });
 
   it('logs skip, returns { ok: true }, and does NOT call push.sendSilent when expoPushToken is null', async () => {
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const store = makeStore({ expoPushToken: null });
     const push = makePush();
     const processor = new NotifyUserProcessor(store as never, push as never);
@@ -75,7 +75,7 @@ describe('NotifyUserProcessor', () => {
   });
 
   it('calls push.sendSilent with the correct args and returns { ok: true } for a valid token', async () => {
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const store = makeStore({ expoPushToken: 'ExponentPushToken[x]' });
     const push = makePush();
     const processor = new NotifyUserProcessor(store as never, push as never);
@@ -91,7 +91,7 @@ describe('NotifyUserProcessor', () => {
   });
 
   it('calls store.getNotifyInfo with the jobId', async () => {
-    const jobId = new Types.ObjectId().toString();
+    const jobId = randomBytes(12).toString('hex');
     const store = makeStore({ expoPushToken: 'ExponentPushToken[x]' });
     const push = makePush();
     const processor = new NotifyUserProcessor(store as never, push as never);

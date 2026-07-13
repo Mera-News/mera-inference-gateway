@@ -1,5 +1,5 @@
 import { Logger, PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
-import { Types } from 'mongoose';
+import { randomBytes } from 'node:crypto';
 import { InferenceJobsService } from './inference-jobs.service';
 import { JobPayloadTooLargeError } from './job-store.port';
 
@@ -14,7 +14,7 @@ describe('InferenceJobsService', () => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
-    requestId = new Types.ObjectId().toString();
+    requestId = randomBytes(12).toString('hex');
     storeMock = { createJob: jest.fn().mockResolvedValue(requestId) };
     flowMock = { createInferenceFlow: jest.fn().mockResolvedValue(undefined) };
     capabilityTokensMock = { mint: jest.fn().mockReturnValue('mc.tok') };

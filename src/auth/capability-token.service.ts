@@ -12,7 +12,10 @@ import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 
 export const CAPABILITY_TOKEN_PREFIX = 'mc.';
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+// 2h. The mobile client abandons any pending job after 1h (STALE_AFTER_MS) and
+// never uses an older token; the Redis request-body TTL is likewise 2h. A short
+// exp caps the window in which a leaked token can bypass subscription gating.
+const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
 
 export type CapabilityScope = 'results:read' | 'jobs:submit-followup';
 

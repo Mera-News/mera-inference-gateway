@@ -108,7 +108,7 @@ export class AuthGuard implements CanActivate, OnModuleInit {
         id: claims.uid,
         // Capability tokens are minted post-subscription-check at submit time;
         // we trust the original gate held when the cycle started. The window
-        // is bounded by the token's 24h TTL.
+        // is bounded by the token's 2h TTL.
         subscriptionIsActive: true,
         capability: claims,
       };

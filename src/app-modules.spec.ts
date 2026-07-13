@@ -6,8 +6,8 @@
  * class evaluates its decorator metadata, which is sufficient for line-
  * coverage on the module decorator declarations.
  *
- * Import-time side-effects that would throw (BullMQ forRootAsync, Mongoose
- * forFeature, BullBoard forFeature) are neutralised by the mocks below.
+ * Import-time side-effects that would throw (BullMQ forRootAsync, BullBoard
+ * forFeature) are neutralised by the mocks below.
  */
 
 // ── Expo ────────────────────────────────────────────────────────────────────
@@ -24,13 +24,13 @@ jest.mock('expo-server-sdk', () => {
   return { Expo };
 });
 
-// ── BullMQ / Mongoose / BullBoard ────────────────────────────────────────────
+// ── BullMQ / BullBoard ───────────────────────────────────────────────────────
 // These NestJS dynamic-module helpers would ordinarily require live config
-// (Redis URL, Mongo URI) at module-init time.  Since we are only importing
-// the *class* and never booting Nest, the decorator arguments (forRootAsync /
-// forFeature) are evaluated immediately at import time — and may throw if the
-// underlying library performs eager validation.  We replace the entire module
-// with thin stubs that return a plain NestJS-compatible module descriptor.
+// (Redis URL) at module-init time.  Since we are only importing the *class*
+// and never booting Nest, the decorator arguments (forRootAsync / forFeature)
+// are evaluated immediately at import time — and may throw if the underlying
+// library performs eager validation.  We replace the entire module with thin
+// stubs that return a plain NestJS-compatible module descriptor.
 
 const stubDynamicModule = () => ({ module: class {} });
 
@@ -47,24 +47,6 @@ jest.mock('@nestjs/bullmq', () => ({
   WorkerHost: class {},
   getQueueToken: (name: string) => `BULL_QUEUE_${name}`,
   getFlowProducerToken: (name: string) => `BULL_FLOW_${name}`,
-}));
-
-jest.mock('@nestjs/mongoose', () => ({
-  MongooseModule: {
-    forRoot: stubDynamicModule,
-    forRootAsync: stubDynamicModule,
-    forFeature: stubDynamicModule,
-  },
-  InjectModel: () => () => {},
-  Prop: () => () => {},
-  Schema: () => () => {},
-  SchemaFactory: {
-    createForClass: () => ({
-      index: () => {},
-      virtual: () => ({ get: () => {} }),
-    }),
-  },
-  getModelToken: (name: string) => `${name}Model`,
 }));
 
 jest.mock('@bull-board/nestjs', () => ({

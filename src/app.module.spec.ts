@@ -5,8 +5,8 @@
  *   • LoggerModule.forRootAsync  (nestjs-pino)
  *   • ThrottlerModule.forRootAsync (@nestjs/throttler)
  *
- * All heavy submodules (DatabaseModule, QueuesModule, and every feature
- * module) are stubbed so the test never touches Mongo, Redis, or Expo SDKs.
+ * All heavy submodules (QueuesModule and every feature module) are stubbed so
+ * the test never touches Redis or Expo SDKs.
  */
 
 // ---------------------------------------------------------------------------
@@ -94,9 +94,6 @@ jest.mock('@nestjs/config', () => ({
 // ---------------------------------------------------------------------------
 // 9. Stub all heavy submodules
 // ---------------------------------------------------------------------------
-jest.mock('./database/database.module', () => ({
-  DatabaseModule: class DatabaseModuleStub {},
-}));
 jest.mock('./queues/queues.module', () => ({
   QueuesModule: class QueuesModuleStub {},
 }));

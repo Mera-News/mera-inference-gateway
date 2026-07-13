@@ -25,8 +25,8 @@ export class FlowService {
   /**
    * Spawn a BullMQ Flow: `finalize-job` parent with N `llm-inference`
    * children. Each child carries only `{ jobId, requestIndex }` — the actual
-   * request body is pulled from Mongo by the worker. Keeps BullMQ payloads
-   * tiny and centralises the source of truth in the inference_jobs doc.
+   * request body is pulled from the job store (Redis) by the worker. Keeps
+   * BullMQ payloads tiny and centralises the source of truth in the job store.
    */
   async createInferenceFlow(params: CreateInferenceFlowParams): Promise<void> {
     const { jobId, requestCount } = params;

@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Types } from 'mongoose';
+import { randomBytes } from 'node:crypto';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest, AuthenticatedUser } from '../auth/auth.guard';
@@ -8,7 +8,7 @@ import { InferenceJobsController } from './inference-jobs.controller';
 import { InferenceJobsService } from './inference-jobs.service';
 import { JOB_STORE } from './job-store.port';
 
-const VALID_ID = new Types.ObjectId().toString();
+const VALID_ID = randomBytes(12).toString('hex');
 
 function makeReq(user: AuthenticatedUser): AuthenticatedRequest {
   return { user } as unknown as AuthenticatedRequest;
@@ -173,7 +173,7 @@ describe('InferenceJobsController', () => {
       });
 
       it("rejects a token whose rid doesn't match the route", async () => {
-        const otherId = new Types.ObjectId().toString();
+        const otherId = randomBytes(12).toString('hex');
         const req = makeReq({
           id: 'user-1',
           subscriptionIsActive: true,

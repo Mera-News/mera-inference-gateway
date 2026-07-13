@@ -104,8 +104,8 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
       ],
       inject: [ConfigService],
     }),
-    // Job-store composition root: binds JOB_STORE to Mongo (default) or the
-    // dedicated Redis instance based on INFERENCE_JOBS_STORE.
+    // Job-store composition root: binds JOB_STORE to the dedicated Redis
+    // instance (INFERENCE_JOBS_REDIS_URL).
     JobStoreModule.register(),
     // Mount Bull Board at /queues. Basic-auth middleware is applied in
     // main.ts before this router handles any request, so the UI is protected.

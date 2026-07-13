@@ -10,9 +10,8 @@ import { JOB_STORE, JobStore } from './../src/inference-jobs/job-store.port';
 
 /**
  * Full async-job cycle against the REAL RedisJobStore (Lua scripts included),
- * exercised through HTTP with INFERENCE_JOBS_STORE=redis. Runs against the
- * same redis:7 service container the BullMQ queues use in CI; no Mongo
- * connection is opened at all in this mode.
+ * exercised through HTTP. Runs against the same redis:7 service container the
+ * BullMQ queues use in CI.
  */
 describe('InferenceGateway redis job store (e2e)', () => {
   let app: INestApplication<App>;
@@ -51,7 +50,6 @@ describe('InferenceGateway redis job store (e2e)', () => {
     process.env.INFERENCE_CAPABILITY_SECRET = 'a'.repeat(64);
     // Same localhost pinning rationale as app.e2e-spec.ts.
     process.env.INFERENCE_REDIS_URL = process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
-    process.env.INFERENCE_JOBS_STORE = 'redis';
     process.env.INFERENCE_JOBS_REDIS_URL =
       process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
     process.env.INFERENCE_JOBS_KEY_PREFIX = E2E_PREFIX;
@@ -61,7 +59,6 @@ describe('InferenceGateway redis job store (e2e)', () => {
     // Isolate this suite's BullMQ keys from app.e2e-spec.ts runs on the same
     // redis container.
     process.env.BULLMQ_PREFIX = 'bull-e2e';
-    delete process.env.INFERENCE_MONGODB_URI;
 
     // Deferred CJS load — JobStoreModule.register() reads process.env at
     // module-body import time, so AppModule must not be imported statically.

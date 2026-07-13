@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { Types } from 'mongoose';
+import { randomBytes } from 'node:crypto';
 import { FinalizeJobProcessor } from './finalize-job.processor';
 import { DEFAULT_JOB_OPTS } from './queues.constants';
 
@@ -26,7 +26,7 @@ describe('FinalizeJobProcessor', () => {
 
   describe('process', () => {
     it('marks the job completed and enqueues notify-user, returning { jobId }', async () => {
-      const jobId = new Types.ObjectId().toString();
+      const jobId = randomBytes(12).toString('hex');
       storeMock.finalizeJob.mockResolvedValue({ requestCount: 3, resultCount: 1 });
 
       const job = { data: { jobId } } as never;
@@ -44,7 +44,7 @@ describe('FinalizeJobProcessor', () => {
     });
 
     it('rejects with /not found at finalize/ when the job is unknown and does NOT call notifyQueue.add', async () => {
-      const jobId = new Types.ObjectId().toString();
+      const jobId = randomBytes(12).toString('hex');
       storeMock.finalizeJob.mockResolvedValue(null);
 
       const job = { data: { jobId } } as never;
