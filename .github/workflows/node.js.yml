@@ -2,7 +2,7 @@ name: Node.js CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "staging", "dev" ]
   pull_request:
     branches: [ "main" ]
 
@@ -14,9 +14,9 @@ jobs:
       matrix:
         node-version: [20.x]
 
-    # The e2e suite boots the full AppModule, which opens Redis (BullMQ) and
-    # MongoDB (Mongoose) connections at startup. Provide both as throwaway
-    # service containers on their default localhost ports.
+    # The e2e suite boots the full AppModule, which opens Redis connections
+    # (BullMQ + the job store) at startup. Provide redis as a throwaway service
+    # container on its default localhost port.
     # Images are pulled from Google's public Docker Hub mirror (mirror.gcr.io)
     # rather than Docker Hub directly: hosted runners frequently hit Docker Hub
     # anonymous rate limits / reachability timeouts ("context deadline exceeded")
@@ -29,15 +29,6 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      mongo:
-        image: mirror.gcr.io/library/mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -71,7 +62,7 @@ jobs:
 
     # The e2e suite spins up its own in-process JWKS server and tests
     # health + auth rejection, booting the full AppModule against the redis
-    # and mongo service containers declared above.
+    # service container declared above.
     - name: Run e2e tests
       run: npm run test:e2e
 

@@ -70,7 +70,7 @@ Synchronous batch inference. Accepts an array of OpenAI-compatible request bodie
 
 ### `POST /v1/inference/jobs`
 
-Submit an async inference job. The job is persisted to MongoDB and processed in the background via BullMQ workers. Returns `202 Accepted` immediately.
+Submit an async inference job. The job is persisted to a dedicated Redis instance (every key TTL'd) and processed in the background via BullMQ workers. Returns `202 Accepted` immediately.
 
 **Headers:**
 - `Authorization: Bearer <jwt-token>` (required)
@@ -93,7 +93,7 @@ Submit an async inference job. The job is persisted to MongoDB and processed in 
 **Response `202`:**
 ```json
 {
-  "requestId": "<mongo-object-id>",
+  "requestId": "<24-hex-random-id>",
   "capabilityToken": "<signed-jwt>"
 }
 ```
@@ -109,7 +109,7 @@ Poll for async job results.
 **Headers:**
 - `Authorization: Bearer <capability-token>` (capability token from submit, recommended) or `Bearer <jwt-token>`
 
-**Path params:** `requestId` — the MongoDB object ID returned at submit time.
+**Path params:** `requestId` — the 24-hex random ID returned at submit time.
 
 **Response (pending):** `{ "pending": true }`
 
@@ -124,7 +124,7 @@ Poll for async job results.
 }
 ```
 
-Results are retained for ~24 hours via a MongoDB TTL index, then automatically deleted.
+Results are retained for ~24 hours via a Redis key TTL, then automatically deleted.
 
 ---
 
@@ -158,12 +158,12 @@ Bull Board admin UI for monitoring BullMQ queues. Protected by HTTP basic auth (
 ```
 POST /v1/inference/jobs
   |
-  +-- create InferenceJob doc (MongoDB, TTL 24h)
+  +-- create job (dedicated Redis, every key TTL'd — job hash 24h)
   |
   +-- BullMQ Flow (FlowService)
         |
         +-- llm-inference (child ×N)   <-- one BullMQ job per request
-        |      proxyChat() → write result to Mongo ($push, atomic)
+        |      proxyChat() → append result (idempotent, Lua HSETNX)
         |
         +-- finalize-job (parent, fires after all children)
         |      marks doc status = 'completed'
@@ -181,8 +181,7 @@ Three BullMQ queues: `llm-inference`, `finalize-job`, `notify-user`. Workers run
 - Node.js 20+
 - A NEAR AI API key — [app.near.ai](https://app.near.ai/)
 - An auth service exposing a JWKS endpoint (see [Backend Requirements](#backend-requirements-byo-backend))
-- Redis 7+ (BullMQ queues)
-- MongoDB 7+ (inference job store)
+- Redis 7+ — BullMQ queues (`INFERENCE_REDIS_URL`) plus a dedicated job-store instance (`INFERENCE_JOBS_REDIS_URL`)
 
 ### Installation
 
@@ -204,7 +203,7 @@ cp .env.example .env
 | `AUTH_JWKS_URL` | Yes | — | Auth service JWKS endpoint (e.g. `https://auth.example.com/api/auth/jwks`) |
 | `AUTH_JWT_ISSUER` | No | `mera-server-auth` | Expected `iss` claim in JWTs |
 | `INFERENCE_REDIS_URL` | Yes | — | Redis connection string for BullMQ |
-| `INFERENCE_MONGODB_URI` | Yes | — | MongoDB connection string for the job store |
+| `INFERENCE_JOBS_REDIS_URL` | Yes | — | Dedicated Redis instance for the job store (NOT the BullMQ one) |
 | `INFERENCE_CAPABILITY_SECRET` | Yes | — | HMAC secret for capability tokens (generate with `openssl rand -hex 32`) |
 | `EXPO_ACCESS_TOKEN` | No | — | Expo push API token; push notifications silently skipped if unset |
 | `PORT` | No | `8080` | Server port |
@@ -217,7 +216,10 @@ cp .env.example .env
 | `INFERENCE_BODY_LIMIT` | No | `50mb` | Express body-parser size limit |
 | `UPSTREAM_TIMEOUT_MS` | No | `30000` | NEAR AI request timeout in ms |
 | `LLM_INFERENCE_CONCURRENCY` | No | `8` | BullMQ worker concurrency for `llm-inference` queue |
-| `INFERENCE_MONGODB_MAX_POOL_SIZE` | No | `10` | MongoDB connection pool size |
+| `INFERENCE_JOBS_KEY_PREFIX` | No | `inf:` | Job-store Redis key namespace (`inf:stg:` on staging) |
+| `INFERENCE_JOBS_RESULT_TTL_SECONDS` | No | `86400` | TTL for the job hash + results (client re-fetch window) |
+| `INFERENCE_JOBS_BODY_TTL_SECONDS` | No | `7200` | TTL for request bodies (only needed while processing) |
+| `INFERENCE_MAX_JOB_BYTES` | No | `5242880` | Submit-time payload byte cap (413 on breach) |
 | `LOG_LEVEL` | No | `debug` (dev) / `warn` (prod) | Pino log level |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board admin UI username; UI returns 503 if unset |
 | `BULLBOARD_ADMIN_PASSWORD` | No | — | Bull Board admin UI password |
@@ -254,7 +256,7 @@ gcloud run deploy mera-inference-gateway \
   --region us-central1 \
   --set-env-vars "NEAR_AI_API_KEY=your-key,NODE_ENV=production" \
   --set-env-vars "AUTH_JWKS_URL=https://auth.example.com/api/auth/jwks" \
-  --set-env-vars "INFERENCE_REDIS_URL=redis://...,INFERENCE_MONGODB_URI=mongodb://..." \
+  --set-env-vars "INFERENCE_REDIS_URL=redis://...,INFERENCE_JOBS_REDIS_URL=redis://..." \
   --set-env-vars "INFERENCE_CAPABILITY_SECRET=your-secret" \
   --port 8080 \
   --allow-unauthenticated
@@ -268,8 +270,8 @@ This is a **standalone gateway release**. You must supply your own dependencies.
 |------------|-------------|
 | **NEAR AI API key** | Obtain from [app.near.ai](https://app.near.ai/). The gateway forwards all inference requests to `https://cloud-api.near.ai/v1`. |
 | **Auth service with JWKS** | Any service that issues JWTs and exposes a JWKS endpoint. Must set the `iss` claim to the value of `AUTH_JWT_ISSUER` (default `mera-server-auth`). The gateway uses `createRemoteJWKSet` from `jose` for stateless, no-database JWT verification. Mera uses [Better Auth](https://better-auth.com) with the `jwt()` plugin enabled. |
-| **Redis 7+** | BullMQ queue backend. Set `INFERENCE_REDIS_URL`. |
-| **MongoDB 7+** | Inference job store. Set `INFERENCE_MONGODB_URI`. Jobs expire automatically via a TTL index (~24 h). |
+| **Redis 7+ (BullMQ)** | BullMQ queue backend. Set `INFERENCE_REDIS_URL`. |
+| **Redis 7+ (job store)** | Dedicated instance holding job payloads/results. Set `INFERENCE_JOBS_REDIS_URL`. Every key carries a TTL — job hash + results expire after ~24 h, request bodies after ~2 h. |
 | **Expo push account** | Optional. Set `EXPO_ACCESS_TOKEN` to enable silent push notifications on job completion. Without it, notifications are silently skipped; clients must poll for results instead. |
 
 ## Configuring for Your Own Fork
