@@ -26,6 +26,14 @@ describe('ChatService', () => {
     expect(() => new ChatService(makeConfig({}))).toThrow(/NEAR_AI_API_KEY/);
   });
 
+  it('defaults UPSTREAM_TIMEOUT_MS to 120_000 (tolerates a cold NEAR model)', () => {
+    const config = makeConfig({ NEAR_AI_API_KEY: 'k' });
+    const getSpy = jest.spyOn(config, 'get');
+    // Construction reads UPSTREAM_TIMEOUT_MS with the fallback baked in.
+    new ChatService(config);
+    expect(getSpy).toHaveBeenCalledWith('UPSTREAM_TIMEOUT_MS', 120_000);
+  });
+
   it('proxies the request upstream with the bearer key and returns the response', async () => {
     const upstreamResponse = { status: 200, ok: true } as Response;
     fetchMock.mockResolvedValue(upstreamResponse);

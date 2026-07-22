@@ -181,7 +181,7 @@ never SCAN, never client-derived prefixes.
 | `INFERENCE_MAX_CONCURRENCY` | No | `8` | In-memory concurrency for batch endpoint |
 | `INFERENCE_MAX_QUEUE_DEPTH` | No | `200` | Max queued+active before batch returns 503 |
 | `INFERENCE_BODY_LIMIT` | No | `50mb` | Express body size limit |
-| `UPSTREAM_TIMEOUT_MS` | No | `30000` | NEAR AI request timeout in ms |
+| `UPSTREAM_TIMEOUT_MS` | No | `120000` | NEAR AI request timeout in ms (tolerates a cold model on first request) |
 | `LLM_INFERENCE_CONCURRENCY` | No | `8` | BullMQ worker concurrency for llm-inference queue |
 | `LOG_LEVEL` | No | `debug` / `warn` | Pino log level (debug in dev, warn in prod) |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board HTTP basic auth username; UI returns 503 if unset |

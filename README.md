@@ -214,7 +214,7 @@ cp .env.example .env
 | `INFERENCE_MAX_CONCURRENCY` | No | `8` | In-memory concurrency for `/v1/chat/completions/batch` |
 | `INFERENCE_MAX_QUEUE_DEPTH` | No | `200` | Max queued+active items before batch returns 503 |
 | `INFERENCE_BODY_LIMIT` | No | `50mb` | Express body-parser size limit |
-| `UPSTREAM_TIMEOUT_MS` | No | `30000` | NEAR AI request timeout in ms |
+| `UPSTREAM_TIMEOUT_MS` | No | `120000` | NEAR AI request timeout in ms (tolerates a cold model on first request) |
 | `LLM_INFERENCE_CONCURRENCY` | No | `8` | BullMQ worker concurrency for `llm-inference` queue |
 | `INFERENCE_JOBS_KEY_PREFIX` | No | `inf:` | Job-store Redis key namespace (`inf:stg:` on staging) |
 | `INFERENCE_JOBS_RESULT_TTL_SECONDS` | No | `86400` | TTL for the job hash + results (client re-fetch window) |
