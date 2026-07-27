@@ -14,7 +14,12 @@ export class ChatService {
       throw new Error('NEAR_AI_API_KEY environment variable is not set');
     }
     this.apiKey = key;
-    this.timeoutMs = this.configService.get<number>('UPSTREAM_TIMEOUT_MS', 30_000);
+    // 120s default: a cold NEAR model (first request after the fleet spins one
+    // up) routinely takes >30s to first byte. At 30s the gateway aborted and
+    // returned 502 while the model was still warming, and the app — which
+    // retries 502 — produced a multi-minute retry storm that could never
+    // complete. Env-overridable via UPSTREAM_TIMEOUT_MS.
+    this.timeoutMs = this.configService.get<number>('UPSTREAM_TIMEOUT_MS', 120_000);
   }
 
   /** Pure proxy: forward body as-is upstream. */
