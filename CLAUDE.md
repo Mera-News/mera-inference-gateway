@@ -4,12 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model Usage Policy
 
-If the current model is Fable, use Fable **only for planning and orchestration** — do not implement directly. For implementation, delegate to Opus and Sonnet subagents (via the Agent tool, `model: "opus"` or `model: "sonnet"`), running them in parallel where tasks are independent:
+**Do it yourself when the context is already loaded and the change is small — ≤3 files and
+~150 lines.** A cold subagent costs ~30–60s of warm-up plus context rediscovery, so delegating
+under that line is slower *and* dearer. Past it, or whenever work can run in parallel, delegate.
+Applies to **Fable and Opus alike**.
 
-- **Opus** for complex tasks or those needing a large context (cross-cutting changes, tricky logic, large files).
-- **Sonnet** for simpler, well-scoped tasks (mechanical edits, boilerplate, isolated changes).
+### Delegate — match the row, don't deliberate
 
-When spawning these subagents, pass on **all relevant context** in the prompt — exact file paths, the plan/decisions already made, relevant code snippets, schema/contract details, and constraints — so the subagent can start implementing immediately instead of spending time rediscovering context.
+| Situation | Action |
+|---|---|
+| ≤3 files, ~150 lines, context already loaded | Do it yourself |
+| Must be serialized in one file | Do it yourself — never two agents on one file |
+| >3 files or >150 lines, or spans repos | Delegate |
+| ≥3 independent units that can run at once | Delegate, 1 agent per unit |
+| ≥5 near-identical edits (locales, DTOs, call sites) | Delegate, batched across Haiku agents |
+| Investigation that would flood context | Delegate to `Explore` |
+
+Units that share an undecided question are **not** independent. Decide it first and repeat the
+answer in every prompt, or keep them in one agent — parallel agents inventing their own answers
+to the same question is the top failure mode of fan-out.
+
+### Model per agent
+
+| Model | Use for |
+|---|---|
+| **Opus** | Tricky logic, cross-cutting or multi-repo changes, large files, and any scout that may later implement |
+| **Sonnet** | Well-scoped single-concern work: one feature file, one service, one test suite |
+| **Haiku** | Mechanical volume: locale translations, string/import/rename sweeps, boilerplate, log triage |
+
+### Plan with scouts, then reuse them
+
+For multi-area work, spawn one **Opus** scout per area to plan that area — use
+`general-purpose`, not `Plan`/`Explore`, which are read-only and can't implement. Then implement
+by `SendMessage`-ing the same agent: it resumes with its context intact and near-zero warm-up.
+A resumed agent keeps its spawn-time model, so spawn scouts at the model that should write the code.
+
+**How many:** 3–6 units → 1 agent each; 7–15 → batch into 6–10; 16+ → batch into 12–24.
+Ceiling 24 concurrent (Opus ≤6, Sonnet ≤12, Haiku ≤24). Send every agent for a stage in **one
+message** so they actually run concurrently.
+
+Every subagent prompt states: **objective, absolute file paths, decisions already made,
+constraints, output format, and what is out of scope.** Tell scouts to escalate ambiguity rather
+than guess. Never `git stash` / `git reset` in a subagent — they share this working tree.
 
 ## Project Overview
 
