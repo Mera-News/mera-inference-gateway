@@ -1,6 +1,7 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UPSTREAM_BASE_URL } from '../constants';
-import { ChatService } from './chat.service';
+import { ChatService, DeadlineElapsedError } from './chat.service';
 
 function makeConfig(values: Record<string, unknown>): ConfigService {
   return {
@@ -20,6 +21,7 @@ describe('ChatService', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   it('throws at construction when NEAR_AI_API_KEY is missing', () => {
@@ -95,6 +97,133 @@ describe('ChatService', () => {
     fetchMock.mockRejectedValue(err);
     const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
     await expect(svc.proxyChat({})).rejects.toBe(err);
+  });
+
+  // -------------------------------------------------------------------------
+  // C.1 — the deadline is stamped at request entry and covers queue wait
+  // -------------------------------------------------------------------------
+
+  it('fails immediately, without an upstream fetch, when the deadline elapsed while queued', async () => {
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+
+    await expect(
+      svc.proxyChat({ model: 'm' }, undefined, {
+        deadlineAt: Date.now() - 1_000,
+        userId: 'user-9',
+      }),
+    ).rejects.toBeInstanceOf(DeadlineElapsedError);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('deadline elapsed in queue'));
+  });
+
+  it('bounds the upstream timer by the REMAINING deadline, not the full budget', async () => {
+    jest.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      capturedSignal = init.signal as AbortSignal;
+      return new Promise<Response>(() => {}); // never settles on its own
+    });
+
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 1_000 }));
+    // 900ms of the 1000ms budget was already spent waiting for a queue slot.
+    void svc.proxyChat({}, undefined, { deadlineAt: Date.now() + 100 }).catch(() => undefined);
+
+    jest.advanceTimersByTime(99);
+    expect(capturedSignal?.aborted).toBe(false);
+    jest.advanceTimersByTime(2);
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it('does not start a fetch when the client signal is already aborted', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const aborted = AbortSignal.abort();
+
+    await expect(
+      svc.proxyChat({ model: 'm' }, undefined, { signal: aborted }),
+    ).rejects.toBeInstanceOf(DeadlineElapsedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // C.2 — an external (client-disconnect) signal aborts the upstream fetch
+  // -------------------------------------------------------------------------
+
+  it('aborts the upstream fetch when the external client signal fires', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    let capturedSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      capturedSignal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        capturedSignal?.addEventListener('abort', () =>
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+        );
+      });
+    });
+
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const external = new AbortController();
+    const promise = svc.proxyChat({}, undefined, { signal: external.signal });
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+
+    external.abort();
+    await assertion;
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // C.3 — attribution in the timeout log
+  // -------------------------------------------------------------------------
+
+  it('names the model and user in the upstream-timeout log line', async () => {
+    jest.useFakeTimers();
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () =>
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+        );
+      });
+    });
+
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 50 }));
+    const promise = svc.proxyChat({ model: 'Qwen/Qwen3.6-35B-A3B-FP8' }, undefined, {
+      userId: 'user-42',
+    });
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    jest.advanceTimersByTime(50);
+    await assertion;
+
+    const line = errorSpy.mock.calls.map((c) => String(c[0])).find((c) => c.includes('timed out'))!;
+    expect(line).toContain('upstream request timed out after');
+    expect(line).toContain('model=Qwen/Qwen3.6-35B-A3B-FP8');
+    expect(line).toContain('user=user-42');
+  });
+
+  it('logs model=default user=unknown when neither is supplied', async () => {
+    jest.useFakeTimers();
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () =>
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+        );
+      });
+    });
+
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 10 }));
+    const promise = svc.proxyChat({});
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    jest.advanceTimersByTime(10);
+    await assertion;
+
+    const line = errorSpy.mock.calls.map((c) => String(c[0])).find((c) => c.includes('timed out'))!;
+    expect(line).toContain('model=default');
+    expect(line).toContain('user=unknown');
   });
 
   it('returns a non-2xx upstream response without throwing (caller handles it)', async () => {

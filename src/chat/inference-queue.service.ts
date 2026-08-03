@@ -15,6 +15,10 @@ export class InferenceQueueService {
     this.maxConcurrency = config.get<number>('INFERENCE_MAX_CONCURRENCY', 8);
     // Reject (vs. queue indefinitely) once active + waiting exceeds 200, so a
     // backlog sheds load instead of exhausting memory.
+    // Left at 200 deliberately: items now carry a deadline stamped at request
+    // entry (see ChatService.createDeadline), so a deep queue drains itself —
+    // anything that waited past the budget fails without an upstream call
+    // instead of accumulating. Re-tune with production data, not blind.
     this.maxDepth = config.get<number>('INFERENCE_MAX_QUEUE_DEPTH', 200);
     this.logger.log(
       `InferenceQueue ready maxConcurrency=${this.maxConcurrency} maxDepth=${this.maxDepth}`,

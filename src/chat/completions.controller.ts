@@ -3,7 +3,7 @@ import type { Response } from 'express';
 import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
-import { ChatService } from './chat.service';
+import { ChatService, DeadlineElapsedError } from './chat.service';
 import { InferenceQueueService } from './inference-queue.service';
 
 /** E2EE request headers forwarded upstream (lowercase → canonical). NEAR AI
@@ -42,10 +42,20 @@ export class CompletionsController {
   @Post('chat/completions')
   async chatCompletions(@Req() req: AuthenticatedRequest, @Res() res: Response) {
     const userId = req.user?.id;
+    // Deadline stamped at request entry — see batch route for why.
+    const deadlineAt = this.chatService.createDeadline();
+    // Deliberately not disposed here: this handler returns while the response
+    // is still streaming, so the listeners must outlive it to catch a client
+    // that walks away mid-stream. They die with the req/res objects.
+    const clientGone = this.clientAbortSignal(req, res);
 
     try {
       const e2eeHeaders = this.extractE2EEHeaders(req);
-      const upstream = await this.chatService.proxyChat(req.body, e2eeHeaders);
+      const upstream = await this.chatService.proxyChat(req.body, e2eeHeaders, {
+        deadlineAt,
+        signal: clientGone.signal,
+        userId,
+      });
 
       res.status(upstream.status);
 
@@ -81,6 +91,13 @@ export class CompletionsController {
       const nodeStream = Readable.fromWeb(
         upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0],
       );
+
+      // ChatService detaches its abort bridge once the upstream *headers*
+      // arrive, and pipe() does not destroy its source when the destination
+      // dies — so without this, a client that walks away mid-stream would
+      // leave NEAR draining into a socket nobody reads. Destroying the
+      // Readable cancels the underlying web stream and drops the connection.
+      clientGone.signal.addEventListener('abort', () => nodeStream.destroy(), { once: true });
 
       nodeStream.pipe(res);
 
@@ -135,9 +152,16 @@ export class CompletionsController {
         `e2eeHeaders=${JSON.stringify(e2eeHeaders)}`,
     );
 
+    const clientGone = this.clientAbortSignal(req, res);
+
     const results = await Promise.all(
-      requests.map((input, index) =>
-        this.queue.run(async () => {
+      requests.map((input, index) => {
+        // Stamped HERE — at request entry, synchronously, before the item is
+        // handed to the queue. Inside `queue.run` it would be stamped after
+        // slot acquisition and the deadline would once again cover upstream
+        // only, which is exactly the bug this fixes.
+        const deadlineAt = this.chatService.createDeadline();
+        return this.queue.run(async () => {
           try {
             const inputModel =
               typeof input === 'object' && input !== null
@@ -148,7 +172,11 @@ export class CompletionsController {
                 typeof inputModel === 'string' ? inputModel : 'default'
               }`,
             );
-            const upstream = await this.chatService.proxyChat(input, e2eeHeaders);
+            const upstream = await this.chatService.proxyChat(input, e2eeHeaders, {
+              deadlineAt,
+              signal: clientGone.signal,
+              userId,
+            });
 
             this.logger.debug(`Batch[${index}] upstream status=${upstream.status}`);
 
@@ -176,20 +204,65 @@ export class CompletionsController {
 
             return { index, response: json };
           } catch (error) {
+            if (error instanceof DeadlineElapsedError) {
+              this.logger.warn(
+                `Batch[${index}] ${error.message} user=${userId ?? 'unknown'} — no upstream call made`,
+              );
+              return { index, error: `Request failed (${error.message})` };
+            }
             this.logger.error(
               `Batch[${index}] failed user=${userId ?? 'unknown'}`,
               error instanceof Error ? error.stack : error,
             );
             return { index, error: 'Request failed' };
           }
-        }),
-      ),
-    );
+        });
+      }),
+    ).finally(() => clientGone.dispose());
 
     this.logger.debug(
       `Batch complete user=${userId ?? 'unknown'} total=${results.length} errors=${results.filter((r) => 'error' in r).length}`,
     );
     res.json({ results });
+  }
+
+  /**
+   * A signal that fires when the client goes away, so an abandoned request
+   * stops burning an InferenceQueueService slot.
+   *
+   * Both guards are load-bearing (measured on Node 20+):
+   *  - `req` 'close' fires ~1ms into a NORMAL request — as soon as the body is
+   *    parsed, long before the response ends. `req.complete` is the
+   *    discriminator: false only when the message was genuinely cut short.
+   *    Without that guard every request would abort itself immediately.
+   *  - `res` 'close' fires both on a normal finish and on a disconnect;
+   *    `res.writableEnded` separates them.
+   *
+   * Listeners live on the per-request objects and die with them.
+   */
+  private clientAbortSignal(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): { signal: AbortSignal; dispose: () => void } {
+    const controller = new AbortController();
+
+    const onReqClose = () => {
+      if (!req.complete) controller.abort();
+    };
+    const onResClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+
+    req.on('close', onReqClose);
+    res.on('close', onResClose);
+
+    return {
+      signal: controller.signal,
+      dispose: () => {
+        req.off('close', onReqClose);
+        res.off('close', onResClose);
+      },
+    };
   }
 
   private extractE2EEHeaders(req: AuthenticatedRequest): Record<string, string> {
