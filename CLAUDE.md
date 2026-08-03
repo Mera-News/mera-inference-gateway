@@ -80,7 +80,7 @@ src/
     capability-token.service.ts  # Mint/verify HMAC-signed capability tokens
   chat/
     chat.module.ts           # Registers CompletionsController + ChatService + InferenceQueueService
-    completions.controller.ts  # POST /v1/chat/completions (SSE or non-streaming E2EE),
+    completions.controller.ts  # POST /v1/chat/completions (2xx body piped through as-is),
     |                          #   POST /v1/chat/completions/batch (in-memory queue backpressure)
     chat.service.ts          # proxyChat() — raw fetch proxy to NEAR AI
     inference-queue.service.ts  # In-memory concurrency limiter for batch endpoint
@@ -115,7 +115,7 @@ src/
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/v1/chat/completions` | JWT | Streaming SSE proxy; switches to non-streaming when E2EE headers present |
+| `POST` | `/v1/chat/completions` | JWT | Transparent proxy; response mode follows the request's `stream` flag (E2EE does not change it) |
 | `POST` | `/v1/chat/completions/batch` | JWT | Synchronous batch; 503 when in-memory queue full |
 | `POST` | `/v1/inference/jobs` | JWT or capability token | Submit async job; returns 202 + capability token |
 | `GET` | `/v1/inference/jobs/:requestId/results` | JWT or capability token | Poll job results; `{ pending: true }` until complete |
@@ -138,7 +138,7 @@ The four canonical E2EE headers forwarded to NEAR AI (exact, case-sensitive):
 - `X-Model-Pub-Key`
 - `X-Encryption-Version`
 
-Presence of any of these on `POST /v1/chat/completions` switches the response from SSE to non-streaming JSON.
+These are forwarded verbatim and do **not** affect the response mode: `POST /v1/chat/completions` pipes any 2xx upstream body through unconditionally, so SSE vs JSON is decided by the request's own `stream` flag. Under `stream: true` each `delta.content` is a self-contained E2EE envelope.
 
 ## Auth
 

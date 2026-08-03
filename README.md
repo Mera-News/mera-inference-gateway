@@ -32,7 +32,7 @@ Streaming chat completions (Server-Sent Events). Accepts an OpenAI-compatible re
 
 #### E2EE mode
 
-When any E2EE header is present the endpoint switches to **non-streaming** mode (required by NEAR AI's E2EE protocol). The gateway forwards the headers verbatim to NEAR AI and relays NEAR AI's E2EE response headers back to the client.
+The gateway forwards the E2EE headers verbatim to NEAR AI and relays NEAR AI's E2EE response headers back to the client. E2EE does **not** change the response mode: the mode follows the request's own `stream` flag, and any 2xx body is piped straight through, SSE or JSON alike. With `stream: true` each streamed `delta.content` is its own self-contained E2EE envelope, independently decryptable by the client.
 
 **E2EE headers (all forwarded to NEAR AI):**
 
@@ -43,7 +43,7 @@ When any E2EE header is present the endpoint switches to **non-streaming** mode 
 | `X-Model-Pub-Key` | Model public key from attestation (hex) |
 | `X-Encryption-Version` | NEAR AI E2EE protocol version (e.g. `2`) |
 
-**Response:** JSON (non-streaming) with encrypted `choices[*].message.content`
+**Response:** follows the request's `stream` flag — SSE with encrypted `choices[*].delta.content` when `stream: true`, otherwise JSON with encrypted `choices[*].message.content`
 
 ---
 
