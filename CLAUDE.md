@@ -49,7 +49,9 @@ than guess. Never `git stash` / `git reset` in a subagent — they share this wo
 
 ## Project Overview
 
-Standalone NestJS inference gateway that proxies E2EE-encrypted chat requests to NEAR AI. The gateway **never decrypts or inspects message content** — it authenticates requests via JWT and forwards encrypted payloads to NEAR AI's TEE-protected inference. An async job subsystem (BullMQ + a dedicated Redis job store) handles large fan-out inference batches and delivers results via silent Expo push notifications.
+Standalone NestJS inference gateway that proxies E2EE-encrypted chat requests to NEAR AI. On the inference path the gateway **never decrypts or inspects message content** — it authenticates requests via JWT and forwards encrypted payloads to NEAR AI's TEE-protected inference. An async job subsystem (BullMQ + a dedicated Redis job store) handles large fan-out inference batches and delivers results via silent Expo push notifications.
+
+**One route is deliberately outside that guarantee: `POST /v1/web-search`.** It takes the user's search terms in **plaintext**, because a third-party search API (Brave) cannot be queried with ciphertext. It is opt-in and off by default (`BRAVE_SEARCH_ENABLED`, default `false`), it sends Brave the query text and nothing else (no user id, no token, no facts, no feed, no chat history), and it never logs or stores the query. State the claim that way — "the gateway never decrypts or inspects message content" is true on every route; "the gateway never sees plaintext" is **not**, and must not be written anywhere.
 
 The job store is a port (`JobStore` in `src/inference-jobs/job-store.port.ts`) with a single adapter: `RedisJobStore`, backed by a dedicated `inference-redis` Memorystore instance (`INFERENCE_JOBS_REDIS_URL`) where every key carries a TTL. BullMQ runs on the separate shared `INFERENCE_REDIS_URL` instance.
 
@@ -96,6 +98,12 @@ src/
       submit-job.dto.ts      # SubmitJobDto, InferenceRequestDto, E2EESessionDto
   attestation/
     attestation.controller.ts  # GET /api/attestation/report — proxies NEAR AI attestation
+  web-search/
+    web-search.module.ts       # Composition root; binds WEB_SEARCH_FETCH to global fetch
+    web-search.controller.ts   # POST /v1/web-search (200; 502 on upstream failure)
+    web-search.service.ts      # Brave proxy: spend gate, length guards, 8s AbortController
+    dto/
+      web-search.dto.ts        # WebSearchRequestDto — { query } and nothing else
   health/
     health.controller.ts     # GET /health
   queues/
@@ -119,6 +127,7 @@ src/
 | `POST` | `/v1/chat/completions/batch` | JWT | Synchronous batch; 503 when in-memory queue full |
 | `POST` | `/v1/inference/jobs` | JWT or capability token | Submit async job; returns 202 + capability token |
 | `GET` | `/v1/inference/jobs/:requestId/results` | JWT or capability token | Poll job results; `{ pending: true }` until complete |
+| `POST` | `/v1/web-search` | JWT or capability token | Brave proxy. **Plaintext query** (see below); `{ results: [] }` when `BRAVE_SEARCH_ENABLED` is off; 400 on length, 502 on upstream failure |
 | `GET` | `/api/attestation/report` | JWT | Proxy NEAR AI TEE attestation report |
 | `GET` | `/health` | None | Health check |
 | `GET` | `/queues` | HTTP basic auth | Bull Board admin UI; 503 if credentials not configured |
@@ -127,7 +136,14 @@ src/
 
 The gateway is intentionally ignorant of message content. `messages[].content` fields contain E2EE-encrypted payloads. Both `ChatService.proxyChat()` and the async job processors forward ciphertext upstream without inspection.
 
-**Never add code that reads, logs, or transforms message content.**
+**Never add code that reads, logs, or transforms message content.** That rule stands unchanged.
+
+`POST /v1/web-search` does not breach it: it is a separate route that carries no `messages[]` at all. What it does carry is a plaintext search string, which is a different thing and is documented as such — a third-party search API has to be queried with the actual terms. The rules that keep it honest:
+
+- **Off by default** (`BRAVE_SEARCH_ENABLED`); while off, nothing leaves the gateway.
+- **Never log the query text** — not at debug, not truncated, not alongside a user id. `WebSearchService` logs lengths and statuses only, and specs assert the query string never appears in any log call.
+- **Send Brave the query and nothing else.** No user id, no bearer token, no facts, no feed, no chat history. `WebSearchRequestDto` declares only `query`, and the global `ValidationPipe` (`whitelist: true`) strips anything else a client sends.
+- **Never widen it.** Do not add a route that forwards decrypted message content to a third party; this exception is scoped to a search string the user typed and is not a precedent.
 
 ## E2EE Headers
 
@@ -222,6 +238,8 @@ never SCAN, never client-derived prefixes.
 | `LOG_LEVEL` | No | `debug` / `warn` | Pino log level (debug in dev, warn in prod) |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board HTTP basic auth username; UI returns 503 if unset |
 | `BULLBOARD_ADMIN_PASSWORD` | No | — | Bull Board HTTP basic auth password |
+| `BRAVE_SEARCH_ENABLED` | No | `false` | Spend gate for `/v1/web-search`; on only when exactly `true` |
+| `BRAVE_SEARCH_API_KEY` | No | — | Brave subscription token (`X-Subscription-Token`). Server-only — never returned, never logged. Needed only when the gate is on |
 
 ## Deployment
 

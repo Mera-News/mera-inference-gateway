@@ -2,11 +2,11 @@
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary%20(All%20Rights%20Reserved)-red)](LICENSE.md)
 
-Privacy-first E2EE inference gateway. Proxies encrypted chat requests to NEAR AI TEE-protected inference without ever accessing user data.
+Privacy-first E2EE inference gateway. Proxies encrypted chat requests to NEAR AI TEE-protected inference without ever reading message content.
 
 ## Why This Exists
 
-**Mera never sees your data.** Messages are end-to-end encrypted on the client using NEAR AI's E2EE protocol before they reach this gateway. The gateway is an opaque pipe — it authenticates the request, then forwards the encrypted payload directly to NEAR AI running inside a Trusted Execution Environment (TEE). Decryption happens only inside the TEE.
+**The inference path is an opaque pipe.** Messages are end-to-end encrypted on the client using NEAR AI's E2EE protocol before they reach this gateway. On the inference routes — `POST /v1/chat/completions`, `POST /v1/chat/completions/batch`, `POST /v1/inference/jobs` and their results — the gateway authenticates the request, then forwards the encrypted payload directly to NEAR AI running inside a Trusted Execution Environment (TEE). It never decrypts or inspects message content; decryption happens only inside the TEE.
 
 ```
 Client (E2EE encrypt) --> mera-inference-gateway --> NEAR AI (TEE decrypt + infer)
@@ -16,6 +16,16 @@ Client (E2EE encrypt) --> mera-inference-gateway --> NEAR AI (TEE decrypt + infe
          |                    |  message content)            v
          +----------------------------------------------------+
 ```
+
+### The one exception: `POST /v1/web-search`
+
+Web search is **not** part of that pipe, and the claim above must not be read as covering it.
+
+- **It receives the query in plaintext.** A third-party search API (Brave) has to be queried with the actual search terms — there is no way to search the web with ciphertext. That is a deliberate trade-off, on a separate route, with a separate posture.
+- **It is opt-in and off by default.** `BRAVE_SEARCH_ENABLED` defaults to `false`; while it is off the endpoint returns an empty result list and no request leaves the gateway.
+- **What is sent to Brave: the query text and nothing else.** No user id, no session or bearer token, no user facts, no feed, no chat history, no conversation context — the outbound request carries exactly the search string, a result count, and the server-side Brave API key.
+- **What the gateway keeps: nothing.** The query text is never logged (not at debug, not truncated) and never stored, and no log line associates a user with a search. The Brave API key is server-only and is never logged or returned.
+- **Everything else is unchanged.** No message content, encrypted or otherwise, is read on any route.
 
 ## API Endpoints
 
@@ -128,6 +138,39 @@ Results are retained for ~24 hours via a Redis key TTL, then automatically delet
 
 ---
 
+### `POST /v1/web-search`
+
+Authenticated proxy for Brave Search. Feeds the chat model's context, which is why it lives on the inference gateway rather than on the news API. **Plaintext route** — see [the exception above](#the-one-exception-post-v1web-search).
+
+**Headers:**
+- `Authorization: Bearer <jwt-token>` (required; capability tokens also accepted)
+
+**Request body:**
+```json
+{ "query": "search terms" }
+```
+
+**Response `200`:**
+```json
+{
+  "results": [
+    { "title": "…", "url": "https://…", "snippet": "…" }
+  ]
+}
+```
+
+At most 10 results. Returns `{ "results": [] }` — never an error — when `BRAVE_SEARCH_ENABLED` is not `true`, so a client degrades quietly.
+
+| Status | When |
+|--------|------|
+| `200` | Success (including the empty list when the feature is off) |
+| `400` | Trimmed query shorter than 2 or longer than 200 characters, or `query` missing/not a string |
+| `401` | Missing or invalid bearer token |
+| `429` | Per-IP throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`) |
+| `502` | Brave unreachable, non-2xx, or `BRAVE_SEARCH_API_KEY` unset while the feature is on |
+
+---
+
 ### `GET /api/attestation/report`
 
 Proxies the NEAR AI TEE attestation report. Use this to retrieve the model's current signing public key before encrypting a message.
@@ -223,6 +266,8 @@ cp .env.example .env
 | `LOG_LEVEL` | No | `debug` (dev) / `warn` (prod) | Pino log level |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board admin UI username; UI returns 503 if unset |
 | `BULLBOARD_ADMIN_PASSWORD` | No | — | Bull Board admin UI password |
+| `BRAVE_SEARCH_ENABLED` | No | `false` | Spend gate for `POST /v1/web-search`. Off unless exactly `true`; while off the route returns `{ "results": [] }` and no request leaves the gateway |
+| `BRAVE_SEARCH_API_KEY` | No | — | Brave Search subscription token, sent as `X-Subscription-Token`. Server-only: never returned to a client and never logged. Required only when `BRAVE_SEARCH_ENABLED=true` |
 
 ### Running
 
@@ -288,7 +333,8 @@ See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 
 ## Security
 
-- **E2EE passthrough** — the gateway never decrypts or inspects message content
+- **E2EE passthrough** — the gateway never decrypts or inspects message content on any route
+- **One plaintext route, scoped** — `POST /v1/web-search` receives search terms in the clear because Brave must be queried with them. Off by default; the query is never logged and never stored; nothing but the query text is sent to Brave
 - **Stateless JWT auth** — Ed25519 asymmetric verification using JWKS; no shared secret, no database
 - **Capability tokens** — scoped per `requestId`; limits blast radius of a leaked token to a single job
 - **Rate limiting** — configurable per-window throttling via `@nestjs/throttler` (default: 30 req/60 s)

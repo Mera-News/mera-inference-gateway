@@ -1,7 +1,7 @@
 {
   "name": "mera-inference-gateway",
   "version": "0.1.0",
-  "description": "Privacy-first E2EE inference gateway — proxies encrypted chat requests to NEAR AI without ever accessing user data",
+  "description": "Privacy-first E2EE inference gateway — proxies encrypted chat requests to NEAR AI without ever reading message content",
   "author": "Mera Labs B.V.",
   "private": true,
   "license": "UNLICENSED",

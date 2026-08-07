@@ -109,6 +109,9 @@ jest.mock('./attestation/attestation.module', () => ({
 jest.mock('./notifications/notifications.module', () => ({
   NotificationsModule: class NotificationsModuleStub {},
 }));
+jest.mock('./web-search/web-search.module', () => ({
+  WebSearchModule: class WebSearchModuleStub {},
+}));
 jest.mock('./inference-jobs/inference-jobs.module', () => ({
   InferenceJobsModule: class InferenceJobsModuleStub {},
 }));

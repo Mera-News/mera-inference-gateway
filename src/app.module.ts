@@ -11,6 +11,7 @@ import { InferenceJobsModule } from './inference-jobs/inference-jobs.module';
 import { JobStoreModule } from './inference-jobs/job-store.module';
 import { QueuesModule } from './queues/queues.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { WebSearchModule } from './web-search/web-search.module';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
 
@@ -116,6 +117,10 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
     AuthModule,
     ChatModule,
     AttestationModule,
+    // Plaintext by necessity and off by default — see the privacy note in
+    // README.md / CLAUDE.md. Separate route, separate posture from the
+    // E2EE inference path.
+    WebSearchModule,
     NotificationsModule,
     QueuesModule,
     InferenceJobsModule,

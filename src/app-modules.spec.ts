@@ -102,6 +102,11 @@ describe('Feature modules are defined', () => {
     expect(NotificationsModule).toBeDefined();
   });
 
+  it('WebSearchModule is defined', () => {
+    const { WebSearchModule } = require('./web-search/web-search.module');
+    expect(WebSearchModule).toBeDefined();
+  });
+
   it('InferenceJobsModule is defined', () => {
     const { InferenceJobsModule } = require('./inference-jobs/inference-jobs.module');
     expect(InferenceJobsModule).toBeDefined();
