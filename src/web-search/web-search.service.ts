@@ -1,5 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { searchUnavailable } from '../search-unavailable';
 
 /** DI token for the `fetch` implementation, so specs bind a stub instead of
  *  reaching the network. Bound to the global `fetch` in `WebSearchModule`. */
@@ -53,6 +54,13 @@ interface BraveWebResult {
  * has to be queried with them. Logging them would turn a pass-through into a
  * record. Log lengths and statuses, never the text, and never alongside a user
  * id: the gateway keeps no association between a user and a search.
+ *
+ * DISABLED IS NOT EMPTY. See `../search-unavailable.ts` for the full argument.
+ * This service USED to return `[]` when its spend gate was off, which a caller
+ * cannot tell apart from a genuine zero-hit search — so a fact-checker built on
+ * it would report a fabricated all-clear. Every state in which we did not reach
+ * Brave now throws a 503 carrying `code: 'search-unavailable'`. A 200 with `[]`
+ * means one thing only: we asked Brave and Brave had nothing.
  */
 @Injectable()
 export class WebSearchService {
@@ -87,15 +95,21 @@ export class WebSearchService {
     }
 
     // Kill switch AFTER validation but BEFORE the key is used or any request is
-    // made. Returns [] rather than throwing — a spend gate must degrade quietly
-    // instead of rendering the client's search UI broken.
+    // made. 503, NOT `[]`: "the operator switched search off" and "Brave found
+    // nothing" must never be the same response. Degrading quietly was the
+    // original intent and it was the wrong trade — a client cannot render an
+    // honest "I could not search" from a success it was handed.
     if (!this.enabled) {
       this.logger.log('web search disabled (BRAVE_SEARCH_ENABLED is not true)');
-      return [];
+      throw searchUnavailable('disabled', 'Web search is disabled on this gateway');
     }
 
+    // Same envelope as the gate above, for the same reason: a deploy that
+    // flipped the flag without provisioning the key must be loud, and it must
+    // not be mistakable for a search that came back empty.
     if (!this.apiKey) {
-      throw new Error('BRAVE_SEARCH_API_KEY is not configured; refusing to call Brave');
+      this.logger.error('BRAVE_SEARCH_ENABLED is true but BRAVE_SEARCH_API_KEY is not configured');
+      throw searchUnavailable('not-configured', 'Web search is not configured');
     }
 
     const count = Math.max(1, Math.min(BRAVE_MAX_COUNT, MAX_WEB_SEARCH_RESULTS));
@@ -119,6 +133,22 @@ export class WebSearchService {
       if (!response.ok) {
         // Status only — the response body of an auth failure can echo request
         // headers back, and those contain the key.
+
+        // A rejected key is a CONFIGURATION failure wearing an upstream status,
+        // so it gets the same 503 as an absent one rather than a 502. Anything
+        // else and a rotated-but-not-updated key would look like a flaky
+        // provider forever.
+        if (response.status === 401 || response.status === 403) {
+          this.logger.error(`Brave rejected our credentials (status ${response.status})`);
+          throw searchUnavailable('upstream-rejected-key', 'Web search is not configured');
+        }
+        // 429 is the one the fact-checker most needs to see as "blocked".
+        // Throttled means WE NEVER LOOKED, and the caller must be able to tell
+        // that apart from "nobody has published on this".
+        if (response.status === 429) {
+          this.logger.warn('Brave rate-limited this gateway (429)');
+          throw searchUnavailable('upstream-rate-limited', 'Web search is rate-limited upstream');
+        }
         throw new Error(`Brave search failed with status ${response.status}`);
       }
 
@@ -126,6 +156,11 @@ export class WebSearchService {
         web?: { results?: BraveWebResult[] };
       };
       const results = body?.web?.results;
+      // `[]` HERE IS HONEST AND STAYS. Brave omits the `web` block entirely on a
+      // query with no hits, so this is the genuine zero-result path — we asked
+      // and the index had nothing. It is the one empty array this service is
+      // still allowed to return, and the 200 status is what distinguishes it
+      // from every unavailable state above.
       if (!Array.isArray(results)) {
         this.logger.warn('Brave search returned no `web.results` array');
         return [];

@@ -12,6 +12,7 @@ import { JobStoreModule } from './inference-jobs/job-store.module';
 import { QueuesModule } from './queues/queues.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WebSearchModule } from './web-search/web-search.module';
+import { FactCheckClaimsModule } from './fact-check-claims/fact-check-claims.module';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
 
@@ -121,6 +122,9 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
     // README.md / CLAUDE.md. Separate route, separate posture from the
     // E2EE inference path.
     WebSearchModule,
+    // ClaimReview lookup — same plaintext posture and the same off-by-default
+    // gate as WebSearchModule, against Google's Fact Check Tools index.
+    FactCheckClaimsModule,
     NotificationsModule,
     QueuesModule,
     InferenceJobsModule,

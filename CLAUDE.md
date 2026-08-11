@@ -51,7 +51,9 @@ than guess. Never `git stash` / `git reset` in a subagent — they share this wo
 
 Standalone NestJS inference gateway that proxies E2EE-encrypted chat requests to NEAR AI. On the inference path the gateway **never decrypts or inspects message content** — it authenticates requests via JWT and forwards encrypted payloads to NEAR AI's TEE-protected inference. An async job subsystem (BullMQ + a dedicated Redis job store) handles large fan-out inference batches and delivers results via silent Expo push notifications.
 
-**One route is deliberately outside that guarantee: `POST /v1/web-search`.** It takes the user's search terms in **plaintext**, because a third-party search API (Brave) cannot be queried with ciphertext. It is opt-in and off by default (`BRAVE_SEARCH_ENABLED`, default `false`), it sends Brave the query text and nothing else (no user id, no token, no facts, no feed, no chat history), and it never logs or stores the query. State the claim that way — "the gateway never decrypts or inspects message content" is true on every route; "the gateway never sees plaintext" is **not**, and must not be written anywhere.
+**Two routes are deliberately outside that guarantee: `POST /v1/web-search` and `POST /v1/fact-check-claims`.** They take the user's search terms in **plaintext**, because a third-party index (Brave; Google's Fact Check Tools / ClaimReview corpus) cannot be queried with ciphertext. Both are opt-in and off by default (`BRAVE_SEARCH_ENABLED` / `FACT_CHECK_TOOLS_ENABLED`, default `false`), both send upstream the query text and nothing else (no user id, no token, no facts, no feed, no chat history), and neither logs or stores the query. State the claim that way — "the gateway never decrypts or inspects message content" is true on every route; "the gateway never sees plaintext" is **not**, and must not be written anywhere.
+
+**Both obey one rule: disabled is never empty.** No configuration state may produce a response a caller can mistake for "we searched and found nothing". `200 + []` means we searched and the index had nothing; `503 + {"code":"search-unavailable"}` means we did not search. `src/search-unavailable.ts` holds the shared envelope and the full argument.
 
 The job store is a port (`JobStore` in `src/inference-jobs/job-store.port.ts`) with a single adapter: `RedisJobStore`, backed by a dedicated `inference-redis` Memorystore instance (`INFERENCE_JOBS_REDIS_URL`) where every key carries a TTL. BullMQ runs on the separate shared `INFERENCE_REDIS_URL` instance.
 
@@ -98,12 +100,19 @@ src/
       submit-job.dto.ts      # SubmitJobDto, InferenceRequestDto, E2EESessionDto
   attestation/
     attestation.controller.ts  # GET /api/attestation/report — proxies NEAR AI attestation
+  search-unavailable.ts      # Shared 503 envelope: SEARCH_UNAVAILABLE_CODE + searchUnavailable()
   web-search/
     web-search.module.ts       # Composition root; binds WEB_SEARCH_FETCH to global fetch
-    web-search.controller.ts   # POST /v1/web-search (200; 502 on upstream failure)
+    web-search.controller.ts   # POST /v1/web-search (200; 502 upstream; 503 unavailable)
     web-search.service.ts      # Brave proxy: spend gate, length guards, 8s AbortController
     dto/
       web-search.dto.ts        # WebSearchRequestDto — { query } and nothing else
+  fact-check-claims/
+    fact-check-claims.module.ts      # Composition root; binds FACT_CHECK_CLAIMS_FETCH
+    fact-check-claims.controller.ts  # POST /v1/fact-check-claims (same shape as web-search)
+    fact-check-claims.service.ts     # Google Fact Check Tools proxy; flattens claimReview[]
+    dto/
+      fact-check-claims.dto.ts       # { query, languageCode?, maxAgeDays? } and nothing else
   health/
     health.controller.ts     # GET /health
   queues/
@@ -127,7 +136,8 @@ src/
 | `POST` | `/v1/chat/completions/batch` | JWT | Synchronous batch; 503 when in-memory queue full |
 | `POST` | `/v1/inference/jobs` | JWT or capability token | Submit async job; returns 202 + capability token |
 | `GET` | `/v1/inference/jobs/:requestId/results` | JWT or capability token | Poll job results; `{ pending: true }` until complete |
-| `POST` | `/v1/web-search` | JWT or capability token | Brave proxy. **Plaintext query** (see below); `{ results: [] }` when `BRAVE_SEARCH_ENABLED` is off; 400 on length, 502 on upstream failure |
+| `POST` | `/v1/web-search` | JWT or capability token | Brave proxy. **Plaintext query** (see below); 400 on length, 502 on an unexpected upstream failure, **503 `search-unavailable` whenever no search happened** (gate off, key unset/rejected, upstream 429) |
+| `POST` | `/v1/fact-check-claims` | JWT or capability token | Google Fact Check Tools (ClaimReview) proxy. **Plaintext query** (see below); returns `claimReview[]` flattened; same 400/502/**503 `search-unavailable`** contract |
 | `GET` | `/api/attestation/report` | JWT | Proxy NEAR AI TEE attestation report |
 | `GET` | `/health` | None | Health check |
 | `GET` | `/queues` | HTTP basic auth | Bull Board admin UI; 503 if credentials not configured |
@@ -138,11 +148,12 @@ The gateway is intentionally ignorant of message content. `messages[].content` f
 
 **Never add code that reads, logs, or transforms message content.** That rule stands unchanged.
 
-`POST /v1/web-search` does not breach it: it is a separate route that carries no `messages[]` at all. What it does carry is a plaintext search string, which is a different thing and is documented as such — a third-party search API has to be queried with the actual terms. The rules that keep it honest:
+`POST /v1/web-search` and `POST /v1/fact-check-claims` do not breach it: they are separate routes that carry no `messages[]` at all. What they do carry is a plaintext search string, which is a different thing and is documented as such — a third-party index has to be queried with the actual terms. The rules that keep them honest:
 
-- **Off by default** (`BRAVE_SEARCH_ENABLED`); while off, nothing leaves the gateway.
-- **Never log the query text** — not at debug, not truncated, not alongside a user id. `WebSearchService` logs lengths and statuses only, and specs assert the query string never appears in any log call.
-- **Send Brave the query and nothing else.** No user id, no bearer token, no facts, no feed, no chat history. `WebSearchRequestDto` declares only `query`, and the global `ValidationPipe` (`whitelist: true`) strips anything else a client sends.
+- **Off by default** (`BRAVE_SEARCH_ENABLED`, `FACT_CHECK_TOOLS_ENABLED`); while off, nothing leaves the gateway — and the route says so with a 503 rather than pretending it searched.
+- **Never log the query text** — not at debug, not truncated, not alongside a user id. Both services log lengths and statuses only, and specs assert the query string never appears in any log call. `FactCheckClaimsService` additionally never logs its request URL: Google takes the API key as a URL parameter, so that one string holds both the secret and the claim.
+- **Send upstream the query and nothing else.** No user id, no bearer token, no facts, no feed, no chat history. The DTOs declare only the query (plus the fact-check route's optional `languageCode` / `maxAgeDays`), and the global `ValidationPipe` (`whitelist: true`) strips anything else a client sends.
+- **Never answer "no results" when you did not search.** Every unavailable state throws `searchUnavailable(...)` from `src/search-unavailable.ts` — a 503 with `code: 'search-unavailable'`. The one empty array either route may still return sits behind a 200 and means the index genuinely had nothing.
 - **Never widen it.** Do not add a route that forwards decrypted message content to a third party; this exception is scoped to a search string the user typed and is not a precedent.
 
 ## E2EE Headers
@@ -238,8 +249,10 @@ never SCAN, never client-derived prefixes.
 | `LOG_LEVEL` | No | `debug` / `warn` | Pino log level (debug in dev, warn in prod) |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board HTTP basic auth username; UI returns 503 if unset |
 | `BULLBOARD_ADMIN_PASSWORD` | No | — | Bull Board HTTP basic auth password |
-| `BRAVE_SEARCH_ENABLED` | No | `false` | Spend gate for `/v1/web-search`; on only when exactly `true` |
+| `BRAVE_SEARCH_ENABLED` | No | `false` | Spend gate for `/v1/web-search`; on only when exactly `true`. Off ⇒ 503 `search-unavailable`, never an empty result |
 | `BRAVE_SEARCH_API_KEY` | No | — | Brave subscription token (`X-Subscription-Token`). Server-only — never returned, never logged. Needed only when the gate is on |
+| `FACT_CHECK_TOOLS_ENABLED` | No | `false` | Gate for `/v1/fact-check-claims`; on only when exactly `true`. Off ⇒ 503 `search-unavailable`. The API's quota is undocumented — confirm it in the Cloud console before leaning on it |
+| `FACT_CHECK_TOOLS_API_KEY` | No | — | Google Fact Check Tools key, sent as the `key` URL param. Server-only — never returned, never logged, and neither is the request URL that carries it |
 
 ## Deployment
 

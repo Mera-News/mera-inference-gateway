@@ -1,5 +1,11 @@
-import { BadGatewayException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
+import { SEARCH_UNAVAILABLE_CODE } from '../search-unavailable';
 import { WebSearchController } from './web-search.controller';
 import { WebSearchService } from './web-search.service';
 
@@ -34,8 +40,31 @@ describe('WebSearchController', () => {
     expect(service.search).toHaveBeenCalledWith('climate');
   });
 
-  it('returns { results: [] } when the service is gated off', async () => {
+  it('returns { results: [] } for a genuine zero-hit search', async () => {
+    // The ONLY empty this route still emits: a 200 meaning "we asked Brave and
+    // Brave had nothing". Every unavailable state 503s instead — see below.
     await expect(controller.webSearch({ query: 'climate' })).resolves.toEqual({ results: [] });
+  });
+
+  it('passes a 503 search-unavailable through instead of flattening it to a 502', async () => {
+    // A 502 would tell the client "the provider failed", which a fact-checker
+    // can shrug off; the 503 + code is what makes it report `blocked`. The
+    // controller's own instanceof-HttpException branch is what preserves it.
+    service.search.mockRejectedValue(
+      new ServiceUnavailableException({
+        code: SEARCH_UNAVAILABLE_CODE,
+        reason: 'disabled',
+        message: 'Web search is disabled on this gateway',
+      }),
+    );
+
+    await expect(controller.webSearch({ query: 'climate' })).rejects.toThrow(
+      ServiceUnavailableException,
+    );
+    await controller.webSearch({ query: 'climate' }).catch((error: ServiceUnavailableException) => {
+      expect(error.getStatus()).toBe(503);
+      expect(error.getResponse()).toMatchObject({ code: SEARCH_UNAVAILABLE_CODE });
+    });
   });
 
   it('passes a 400 from the service straight through', async () => {

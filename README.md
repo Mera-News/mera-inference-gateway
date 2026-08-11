@@ -17,15 +17,27 @@ Client (E2EE encrypt) --> mera-inference-gateway --> NEAR AI (TEE decrypt + infe
          +----------------------------------------------------+
 ```
 
-### The one exception: `POST /v1/web-search`
+### The two exceptions: `POST /v1/web-search` and `POST /v1/fact-check-claims`
 
-Web search is **not** part of that pipe, and the claim above must not be read as covering it.
+The two lookup routes are **not** part of that pipe, and the claim above must not be read as covering them. They share one posture, described here once.
 
-- **It receives the query in plaintext.** A third-party search API (Brave) has to be queried with the actual search terms — there is no way to search the web with ciphertext. That is a deliberate trade-off, on a separate route, with a separate posture.
-- **It is opt-in and off by default.** `BRAVE_SEARCH_ENABLED` defaults to `false`; while it is off the endpoint returns an empty result list and no request leaves the gateway.
-- **What is sent to Brave: the query text and nothing else.** No user id, no session or bearer token, no user facts, no feed, no chat history, no conversation context — the outbound request carries exactly the search string, a result count, and the server-side Brave API key.
-- **What the gateway keeps: nothing.** The query text is never logged (not at debug, not truncated) and never stored, and no log line associates a user with a search. The Brave API key is server-only and is never logged or returned.
+- **They receive the query in plaintext.** A third-party index — Brave for web search, Google's Fact Check Tools API for ClaimReview — has to be queried with the actual terms; there is no way to search with ciphertext. That is a deliberate trade-off, on separate routes, with a separate posture.
+- **They are opt-in and off by default.** `BRAVE_SEARCH_ENABLED` and `FACT_CHECK_TOOLS_ENABLED` default to `false`; while a gate is off, no request leaves the gateway for that route.
+- **What is sent upstream: the query text and nothing else.** No user id, no session or bearer token, no user facts, no feed, no chat history, no conversation context — the outbound request carries exactly the search string, a result count, the caller's optional language/age filters, and the server-side API key.
+- **What the gateway keeps: nothing.** The query text is never logged (not at debug, not truncated) and never stored, and no log line associates a user with a search. The API keys are server-only and are never logged or returned. Fact Check Tools takes its key as a URL parameter, so that route never logs a request URL either.
 - **Everything else is unchanged.** No message content, encrypted or otherwise, is read on any route.
+
+#### Disabled is not empty
+
+Both routes obey one rule: **no configuration state may produce a response a caller can mistake for "we searched and found nothing."**
+
+| Response | Means |
+|---|---|
+| `200` with a populated list | We searched. Hits. |
+| `200` with `[]` | **We searched**, and the index had nothing. A real answer. |
+| `503` + `{"code": "search-unavailable"}` | **We did not search.** Gate off, key missing, key rejected, or upstream throttled. |
+
+`/v1/web-search` used to return `{"results": []}` when its own gate was off, which is byte-identical to a real zero-hit search. Anything built on that — a fact-checker especially — would report a fabricated all-clear from a missing env var. The 503 carries a stable `code` plus a coarse `reason` (`disabled`, `not-configured`, `upstream-rejected-key`, `upstream-rate-limited`); the reason never contains the query, the key, or a user id.
 
 ## API Endpoints
 
@@ -159,15 +171,61 @@ Authenticated proxy for Brave Search. Feeds the chat model's context, which is w
 }
 ```
 
-At most 10 results. Returns `{ "results": [] }` — never an error — when `BRAVE_SEARCH_ENABLED` is not `true`, so a client degrades quietly.
+At most 10 results. `{ "results": [] }` behind a `200` means exactly one thing: we asked Brave and Brave had nothing. Every state in which the gateway did **not** reach Brave is a `503` instead — see [Disabled is not empty](#disabled-is-not-empty).
 
 | Status | When |
 |--------|------|
-| `200` | Success (including the empty list when the feature is off) |
+| `200` | Success, including a genuine zero-hit search |
 | `400` | Trimmed query shorter than 2 or longer than 200 characters, or `query` missing/not a string |
 | `401` | Missing or invalid bearer token |
 | `429` | Per-IP throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`) |
-| `502` | Brave unreachable, non-2xx, or `BRAVE_SEARCH_API_KEY` unset while the feature is on |
+| `502` | Brave unreachable or returned an unexpected non-2xx |
+| `503` | `{"code":"search-unavailable"}` — gate off, key unset, key rejected by Brave (401/403), or Brave throttled us (429). **No search happened.** |
+
+---
+
+### `POST /v1/fact-check-claims`
+
+Authenticated proxy for Google's [Fact Check Tools API](https://developers.google.com/fact-check/tools/api/reference/rest/v1alpha1/claims/search) (`claims:search`), which serves the ClaimReview structured data IFCN signatories publish. **Plaintext route** — same posture as web search above.
+
+It exists so "which organisation checked this claim" is a *structured lookup* rather than a model's inference: an organisation returned from this index cannot be hallucinated, and `textualRating` is already the publisher's own verdict wording.
+
+**Headers:**
+- `Authorization: Bearer <jwt-token>` (required; capability tokens also accepted)
+
+**Request body** (`languageCode` and `maxAgeDays` optional):
+```json
+{ "query": "the claim text", "languageCode": "en", "maxAgeDays": 365 }
+```
+
+**Response `200`:** the upstream `claims[].claimReview[]` nesting flattened, each entry carrying its parent claim's context. Field names are Google's — mapping them to a UI shape is the client's job.
+```json
+{
+  "claimReviews": [
+    {
+      "claim": "…", "claimant": "…", "claimDate": "…",
+      "publisher": { "name": "PolitiFact", "site": "politifact.com" },
+      "url": "https://…", "title": "…", "reviewDate": "…",
+      "textualRating": "Pants on Fire", "languageCode": "en"
+    }
+  ]
+}
+```
+
+At most 20 flattened reviews (`pageSize=10` upstream; one claim can carry several reviews). **An empty list behind a `200` is a real, publishable answer**: no IFCN signatory has published on this claim. That is the *normal* outcome for most news — measured coverage on this corpus is roughly 4% — and it must never be rendered as a failure.
+
+Omitting `languageCode` is a deliberate, valid request, not a degraded one: the corpus skews heavily English, so a locale-scoped miss is worth retrying unfiltered before concluding nobody has published.
+
+| Status | When |
+|--------|------|
+| `200` | Success, including the honest empty |
+| `400` | Trimmed query shorter than 2 or longer than 300 characters, malformed `languageCode`, or `maxAgeDays` outside 1–3650 |
+| `401` | Missing or invalid bearer token |
+| `429` | Per-IP throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`) |
+| `502` | Upstream unreachable or returned an unexpected non-2xx |
+| `503` | `{"code":"search-unavailable"}` — gate off, key unset, key rejected (401/403), or upstream throttled (429). **No lookup happened**, and it is not evidence that nobody checked the claim. |
+
+⚠️ The published quota for this API is **undocumented**. Confirm it in the Cloud console before depending on it at volume.
 
 ---
 
@@ -266,8 +324,10 @@ cp .env.example .env
 | `LOG_LEVEL` | No | `debug` (dev) / `warn` (prod) | Pino log level |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board admin UI username; UI returns 503 if unset |
 | `BULLBOARD_ADMIN_PASSWORD` | No | — | Bull Board admin UI password |
-| `BRAVE_SEARCH_ENABLED` | No | `false` | Spend gate for `POST /v1/web-search`. Off unless exactly `true`; while off the route returns `{ "results": [] }` and no request leaves the gateway |
+| `BRAVE_SEARCH_ENABLED` | No | `false` | Spend gate for `POST /v1/web-search`. Off unless exactly `true`; while off the route answers `503 search-unavailable` and no request leaves the gateway |
 | `BRAVE_SEARCH_API_KEY` | No | — | Brave Search subscription token, sent as `X-Subscription-Token`. Server-only: never returned to a client and never logged. Required only when `BRAVE_SEARCH_ENABLED=true` |
+| `FACT_CHECK_TOOLS_ENABLED` | No | `false` | Gate for `POST /v1/fact-check-claims`. Off unless exactly `true`; while off the route answers `503 search-unavailable` and no request leaves the gateway |
+| `FACT_CHECK_TOOLS_API_KEY` | No | — | Google Fact Check Tools API key, sent as the `key` URL parameter. Server-only: never returned, never logged — and neither is the request URL, which contains it. Required only when `FACT_CHECK_TOOLS_ENABLED=true` |
 
 ### Running
 
@@ -334,7 +394,7 @@ See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 ## Security
 
 - **E2EE passthrough** — the gateway never decrypts or inspects message content on any route
-- **One plaintext route, scoped** — `POST /v1/web-search` receives search terms in the clear because Brave must be queried with them. Off by default; the query is never logged and never stored; nothing but the query text is sent to Brave
+- **Two plaintext routes, scoped** — `POST /v1/web-search` and `POST /v1/fact-check-claims` receive search terms in the clear because a third-party index must be queried with them. Both off by default; the query is never logged and never stored; nothing but the query text (plus optional language/age filters) is sent upstream. Neither can answer "no results" when it did not actually search — a disabled or throttled route returns `503 search-unavailable`
 - **Stateless JWT auth** — Ed25519 asymmetric verification using JWKS; no shared secret, no database
 - **Capability tokens** — scoped per `requestId`; limits blast radius of a leaked token to a single job
 - **Rate limiting** — configurable per-window throttling via `@nestjs/throttler` (default: 30 req/60 s)

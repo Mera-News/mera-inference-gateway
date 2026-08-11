@@ -1,5 +1,6 @@
-import { BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SEARCH_UNAVAILABLE_CODE } from '../search-unavailable';
 import {
   FetchFn,
   MAX_QUERY_LENGTH,
@@ -37,6 +38,17 @@ function braveBody(count: number) {
 
 const ENABLED = { BRAVE_SEARCH_ENABLED: 'true', BRAVE_SEARCH_API_KEY: 'brave-key' };
 
+/** Asserts the exact 503 envelope the app branches on. Used everywhere the
+ *  gateway did NOT reach Brave — the whole point of these tests is that no such
+ *  state can produce something a caller reads as "we searched, no hits". */
+async function expectUnavailable(promise: Promise<unknown>, reason: string): Promise<void> {
+  await expect(promise).rejects.toThrow(ServiceUnavailableException);
+  await promise.catch((error: ServiceUnavailableException) => {
+    expect(error.getStatus()).toBe(503);
+    expect(error.getResponse()).toMatchObject({ code: SEARCH_UNAVAILABLE_CODE, reason });
+  });
+}
+
 function makeService(
   values: Record<string, unknown>,
   fetchMock: jest.Mock = jest.fn(),
@@ -57,10 +69,15 @@ describe('WebSearchService', () => {
     jest.useRealTimers();
   });
 
+  // DISABLED IS NOT EMPTY. These assertions are the counter-metric: feed the
+  // service the exact configuration that used to produce a fabricated all-clear
+  // and watch it refuse instead. If any of them ever goes back to `toEqual([])`,
+  // a fact-checker built on this route can report "nobody disputes this" from a
+  // missing env var.
   describe('spend gate (BRAVE_SEARCH_ENABLED)', () => {
-    it('defaults to OFF and returns an empty list without touching fetch', async () => {
+    it('defaults to OFF and 503s search-unavailable without touching fetch', async () => {
       const { service, fetchMock } = makeService({ BRAVE_SEARCH_API_KEY: 'brave-key' });
-      await expect(service.search('anything')).resolves.toEqual([]);
+      await expectUnavailable(service.search('anything'), 'disabled');
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -68,10 +85,16 @@ describe('WebSearchService', () => {
       'stays off for BRAVE_SEARCH_ENABLED=%p',
       async (flag) => {
         const { service, fetchMock } = makeService({ BRAVE_SEARCH_ENABLED: flag });
-        await expect(service.search('anything')).resolves.toEqual([]);
+        await expectUnavailable(service.search('anything'), 'disabled');
         expect(fetchMock).not.toHaveBeenCalled();
       },
     );
+
+    it('never resolves an empty array from a disabled gate', async () => {
+      const { service } = makeService({});
+      // Belt-and-braces on the sentence above: the resolve path must not exist.
+      await expect(service.search('anything')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
 
     it.each(['true', 'TRUE', 'True'])('turns on for %p', async (flag) => {
       const fetchMock = jest.fn().mockResolvedValue(jsonResponse(braveBody(1)));
@@ -92,10 +115,17 @@ describe('WebSearchService', () => {
       expect(() => makeService({})).not.toThrow();
     });
 
-    it('throws when enabled without an API key rather than calling Brave keyless', async () => {
+    it('503s search-unavailable when enabled without an API key, never calling Brave', async () => {
       const { service, fetchMock } = makeService({ BRAVE_SEARCH_ENABLED: 'true' });
-      await expect(service.search('anything')).rejects.toThrow(/BRAVE_SEARCH_API_KEY/);
+      await expectUnavailable(service.search('anything'), 'not-configured');
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('never names the env var in the client-visible message', async () => {
+      const { service } = makeService({ BRAVE_SEARCH_ENABLED: 'true' });
+      await service.search('anything').catch((error: ServiceUnavailableException) => {
+        expect(JSON.stringify(error.getResponse())).not.toContain('BRAVE_SEARCH_API_KEY');
+      });
     });
   });
 
@@ -242,6 +272,10 @@ describe('WebSearchService', () => {
       ]);
     });
 
+    // THE HONEST EMPTY, and it must survive. Brave omits the `web` block on a
+    // genuine zero-hit query, so `[]` behind a 200 is a real answer. Making
+    // *this* unavailable would be the opposite failure — reporting "I could not
+    // look" when we looked and found nothing.
     it('returns [] when the body has no web.results array', async () => {
       const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ web: {} }));
       const { service } = makeService(ENABLED, fetchMock);
@@ -254,7 +288,19 @@ describe('WebSearchService', () => {
       await expect(service.search('climate')).resolves.toEqual([]);
     });
 
-    it('throws on a non-2xx status without leaking the body', async () => {
+    it.each([401, 403])('maps a rejected key (%i) to 503 search-unavailable', async (status) => {
+      const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ secret: 'x' }, status));
+      const { service } = makeService(ENABLED, fetchMock);
+      await expectUnavailable(service.search('climate'), 'upstream-rejected-key');
+    });
+
+    it('maps an upstream 429 to 503 search-unavailable, never to an empty result', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(jsonResponse({}, 429));
+      const { service } = makeService(ENABLED, fetchMock);
+      await expectUnavailable(service.search('climate'), 'upstream-rate-limited');
+    });
+
+    it('throws on any other non-2xx status without leaking the body', async () => {
       const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ secret: 'x' }, 422));
       const { service } = makeService(ENABLED, fetchMock);
       await expect(service.search('climate')).rejects.toThrow(
