@@ -35,6 +35,9 @@ Two triggers deploy this repo (`mera-infra/cloud-build.tf:296` and `:394`): `dep
 
 ## Load a skill
 
+Read the skill before the code, even for a one-line fix. It carries this area's map,
+invariants and traps.
+
 | Working on | Load |
 |---|---|
 | Anything in this repo | `mera-gateway` skill — full route table, src/ map, invariants, traps, env vars |
