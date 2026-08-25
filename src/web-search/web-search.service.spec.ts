@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { SEARCH_UNAVAILABLE_CODE } from '../search-unavailable';
 import {
   FetchFn,
+  MAX_BATCH_QUERIES,
   MAX_QUERY_LENGTH,
   MAX_WEB_SEARCH_RESULTS,
   MIN_QUERY_LENGTH,
@@ -348,6 +349,116 @@ describe('WebSearchService', () => {
       await service.search('climate');
 
       expect(clearSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('searchMany — the multi-query fan-out', () => {
+    it('issues one Brave request per query and keeps the order', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(jsonResponse(braveBody(1)));
+      const { service } = makeService(ENABLED, fetchMock);
+
+      const entries = await service.searchMany(['alpha', 'beta', 'gamma']);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(entries.map((e) => e.query)).toEqual(['alpha', 'beta', 'gamma']);
+      expect(entries.every((e) => 'results' in e)).toBe(true);
+    });
+
+    it('runs the queries concurrently, not one after another', async () => {
+      let inFlight = 0;
+      let peak = 0;
+      const fetchMock = jest.fn().mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        return jsonResponse(braveBody(1));
+      });
+      const { service } = makeService(ENABLED, fetchMock as unknown as jest.Mock);
+
+      await service.searchMany(['aa', 'bb', 'cc']);
+
+      // The whole point of moving the fan-out server-side. Serial execution
+      // would never put more than one request in flight.
+      expect(peak).toBeGreaterThan(1);
+    });
+
+    it('reports a per-entry failure without failing the queries that worked', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(braveBody(2)))
+        .mockResolvedValueOnce(jsonResponse({}, 429))
+        .mockResolvedValueOnce(jsonResponse({}, 500));
+      const { service } = makeService(ENABLED, fetchMock);
+
+      const entries = await service.searchMany(['ok', 'throttled', 'broken']);
+
+      expect(entries[0]).toEqual({ query: 'ok', results: expect.any(Array) });
+      expect(entries[1]).toEqual({
+        query: 'throttled',
+        code: SEARCH_UNAVAILABLE_CODE,
+        reason: 'upstream-rate-limited',
+      });
+      expect(entries[2]).toEqual({
+        query: 'broken',
+        code: SEARCH_UNAVAILABLE_CODE,
+        reason: 'upstream-failed',
+      });
+    });
+
+    it('keeps a genuine zero-hit entry distinct from an unavailable one', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(jsonResponse({}));
+      const { service } = makeService(ENABLED, fetchMock);
+
+      const [entry] = await service.searchMany(['nothing at all']);
+
+      // 'results: []' means we asked and the index had nothing. That is the one
+      // honest empty, and it must never be collapsed with `code`.
+      expect(entry).toEqual({ query: 'nothing at all', results: [] });
+    });
+
+    it('fails the WHOLE request when the key is rejected — that is about us, not one query', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(braveBody(1)))
+        .mockResolvedValueOnce(jsonResponse({}, 401));
+      const { service } = makeService(ENABLED, fetchMock);
+
+      await expect(service.searchMany(['aa', 'bb'])).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+    });
+
+    it('503s for the whole request when the gate is off, and never searches', async () => {
+      const { service, fetchMock } = makeService({ BRAVE_SEARCH_API_KEY: 'brave-key' });
+
+      await expect(service.searchMany(['aa', 'bb'])).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('validates every query before billing any of them', async () => {
+      const { service, fetchMock } = makeService(ENABLED);
+
+      await expect(service.searchMany(['a perfectly fine query', 'x'])).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses more queries than the spend ceiling', async () => {
+      const { service, fetchMock } = makeService(ENABLED);
+
+      await expect(
+        service.searchMany(Array.from({ length: MAX_BATCH_QUERIES + 1 }, (_, i) => `query ${i}`)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses an empty batch', async () => {
+      const { service } = makeService(ENABLED);
+      await expect(service.searchMany([])).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });

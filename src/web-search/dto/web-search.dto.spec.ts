@@ -12,10 +12,27 @@ describe('WebSearchRequestDto', () => {
     await expect(check({ query: 'climate summit' })).resolves.toHaveLength(0);
   });
 
-  it('rejects a missing query', async () => {
-    const errors = await check({});
+  it('accepts a queries array', async () => {
+    await expect(check({ queries: ['a', 'b'] })).resolves.toHaveLength(0);
+  });
+
+  // An empty body is SCHEMA-valid and the controller rejects it. The
+  // "exactly one of query/queries" rule cannot be written as a decorator
+  // without a custom validator, and the answer has to be a sentence the caller
+  // can act on rather than a constraint name.
+  it('leaves an empty body to the controller', async () => {
+    await expect(check({})).resolves.toHaveLength(0);
+  });
+
+  it.each([[42], [null], [[7]]])('rejects a non-string-array queries (%p)', async (value) => {
+    const errors = await check({ queries: value });
     expect(errors).toHaveLength(1);
-    expect(Object.keys(errors[0].constraints ?? {})).toContain('isString');
+  });
+
+  it(`rejects more than the batch ceiling`, async () => {
+    const errors = await check({ queries: ['a', 'b', 'c', 'd', 'e'] });
+    expect(errors).toHaveLength(1);
+    expect(Object.keys(errors[0].constraints ?? {})).toContain('arrayMaxSize');
   });
 
   it.each([[42], [null], [{ q: 'x' }], [['a']]])(
@@ -38,7 +55,8 @@ describe('WebSearchRequestDto', () => {
     // data can ride along on this route even if a client sends it.
     await validate(dto, { whitelist: true });
 
-    expect(Object.keys(dto)).toEqual(['query']);
+    expect(Object.keys(dto).sort()).toEqual(['queries', 'query']);
     expect(dto.query).toBe('climate');
+    expect(dto.queries).toBeUndefined();
   });
 });

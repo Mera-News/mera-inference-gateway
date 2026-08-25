@@ -1,5 +1,6 @@
 import {
   BadGatewayException,
+  BadRequestException,
   Body,
   Controller,
   HttpCode,
@@ -10,7 +11,11 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
 import { WebSearchRequestDto } from './dto/web-search.dto';
-import { WebSearchService, WebSearchResultItem } from './web-search.service';
+import {
+  WebSearchService,
+  type WebSearchBatchEntry,
+  type WebSearchResultItem,
+} from './web-search.service';
 
 /**
  * `POST /v1/web-search` — the one route on this gateway that handles plaintext.
@@ -31,9 +36,22 @@ export class WebSearchController {
 
   @Post('web-search')
   @HttpCode(200)
-  async webSearch(@Body() dto: WebSearchRequestDto): Promise<{ results: WebSearchResultItem[] }> {
+  async webSearch(
+    @Body() dto: WebSearchRequestDto,
+  ): Promise<{ results: WebSearchResultItem[] } | { searches: WebSearchBatchEntry[] }> {
+    // EXACTLY ONE SHAPE PER REQUEST. Answering a body that carries both would
+    // mean silently picking one, and the caller would never learn which.
+    const hasQuery = dto.query !== undefined;
+    const hasQueries = dto.queries !== undefined;
+    if (hasQuery === hasQueries) {
+      throw new BadRequestException('Provide exactly one of `query` or `queries`');
+    }
+
     try {
-      return { results: await this.webSearchService.search(dto.query) };
+      if (hasQueries) {
+        return { searches: await this.webSearchService.searchMany(dto.queries as string[]) };
+      }
+      return { results: await this.webSearchService.search(dto.query as string) };
     } catch (error) {
       // Length rejections (400) are the caller's problem and pass through
       // verbatim; anything else is an upstream/config failure.

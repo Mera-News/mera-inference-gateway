@@ -37,7 +37,7 @@ Both routes obey one rule: **no configuration state may produce a response a cal
 | `200` with `[]` | **We searched**, and the index had nothing. A real answer. |
 | `503` + `{"code": "search-unavailable"}` | **We did not search.** Gate off, key missing, key rejected, or upstream throttled. |
 
-`/v1/web-search` used to return `{"results": []}` when its own gate was off, which is byte-identical to a real zero-hit search. Anything built on that — a fact-checker especially — would report a fabricated all-clear from a missing env var. The 503 carries a stable `code` plus a coarse `reason` (`disabled`, `not-configured`, `upstream-rejected-key`, `upstream-rate-limited`); the reason never contains the query, the key, or a user id.
+`/v1/web-search` used to return `{"results": []}` when its own gate was off, which is byte-identical to a real zero-hit search. Anything built on that — a fact-checker especially — would report a fabricated all-clear from a missing env var. The 503 carries a stable `code` plus a coarse `reason` (`disabled`, `not-configured`, `upstream-rejected-key`, `upstream-rate-limited`, and per-entry only, `upstream-failed`); the reason never contains the query, the key, or a user id.
 
 ## API Endpoints
 
@@ -157,12 +157,17 @@ Authenticated proxy for Brave Search. Feeds the chat model's context, which is w
 **Headers:**
 - `Authorization: Bearer <jwt-token>` (required; capability tokens also accepted)
 
-**Request body:**
+**Request body — exactly one of two shapes:**
 ```json
 { "query": "search terms" }
 ```
+```json
+{ "queries": ["first thing", "second thing", "third thing"] }
+```
 
-**Response `200`:**
+A body carrying both, or neither, is a `400`. At most 4 queries per request.
+
+**Response `200`, single query:**
 ```json
 {
   "results": [
@@ -171,12 +176,27 @@ Authenticated proxy for Brave Search. Feeds the chat model's context, which is w
 }
 ```
 
-At most 10 results. `{ "results": [] }` behind a `200` means exactly one thing: we asked Brave and Brave had nothing. Every state in which the gateway did **not** reach Brave is a `503` instead — see [Disabled is not empty](#disabled-is-not-empty).
+**Response `200`, multiple queries** — one entry per query, in request order:
+```json
+{
+  "searches": [
+    { "query": "first thing",  "results": [ { "title": "…", "url": "https://…", "snippet": "…" } ] },
+    { "query": "second thing", "results": [] },
+    { "query": "third thing",  "code": "search-unavailable", "reason": "upstream-rate-limited" }
+  ]
+}
+```
+
+The queries are issued to Brave **concurrently**, which is the whole reason this shape exists: the app funnels every gateway call through a shared FIFO that grants one caller every 3 seconds, so several searches sent from the device cost several multiples of that in waiting. Batching removes the waiting, not the cost — 4 queries are still 4 billed Brave requests.
+
+An entry carries **either** `results` **or** `code`, never both, and that split is the multi-query form of "disabled is not empty": `results: []` means we asked and the index had nothing, while `code` means we never looked at that query. A whole-request `503` is still reserved for the states that doom every query alike — gate off, key unset, key rejected. A timeout or a throttle on one query is reported on that entry, and the queries that succeeded are still returned.
+
+At most 10 results per query. Every state in which the gateway did **not** reach Brave is a `503` or a per-entry `code` — see [Disabled is not empty](#disabled-is-not-empty).
 
 | Status | When |
 |--------|------|
-| `200` | Success, including a genuine zero-hit search |
-| `400` | Trimmed query shorter than 2 or longer than 200 characters, or `query` missing/not a string |
+| `200` | Success, including a genuine zero-hit search and a batch with some entries unavailable |
+| `400` | Trimmed query shorter than 2 or longer than 200 characters; neither or both of `query`/`queries` given; `queries` empty or longer than 4 |
 | `401` | Missing or invalid bearer token |
 | `429` | Per-IP throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`) |
 | `502` | Brave unreachable or returned an unexpected non-2xx |

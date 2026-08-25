@@ -46,7 +46,15 @@ export type SearchUnavailableReason =
   /** Upstream rejected our credentials (401/403). A wrong or revoked key. */
   | 'upstream-rejected-key'
   /** Upstream rate-limited us (429). Transient, and never "no results". */
-  | 'upstream-rate-limited';
+  | 'upstream-rate-limited'
+  /**
+   * Upstream failed for any other reason — a timeout, or a status we do not
+   * classify. Reachable ONLY per-entry in a multi-query search, where one
+   * query's failure must not fail the others: a single-query request still
+   * turns the same condition into a 502, because there the caller has nothing
+   * else in the response to read.
+   */
+  | 'upstream-failed';
 
 /**
  * Builds the 503 both search routes throw. Thrown from the SERVICE so the

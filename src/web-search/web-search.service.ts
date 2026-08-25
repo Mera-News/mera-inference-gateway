@@ -1,6 +1,16 @@
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { searchUnavailable } from '../search-unavailable';
+import {
+  SEARCH_UNAVAILABLE_CODE,
+  searchUnavailable,
+  type SearchUnavailableReason,
+} from '../search-unavailable';
 
 /** DI token for the `fetch` implementation, so specs bind a stub instead of
  *  reaching the network. Bound to the global `fetch` in `WebSearchModule`. */
@@ -23,6 +33,33 @@ export const MAX_QUERY_LENGTH = 200;
 /** Hard result cap. Not caller-settable — there is no `limit` in the request. */
 export const MAX_WEB_SEARCH_RESULTS = 10;
 
+/**
+ * How many queries one multi-query request may carry.
+ *
+ * THIS IS THE SPEND CEILING PER CHAT TURN, and it is the only thing standing
+ * between a model that likes searching and a Brave bill. Batching removes
+ * waiting, never cost: N queries are still N billed Brave requests, issued
+ * concurrently instead of one after another.
+ */
+export const MAX_BATCH_QUERIES = 4;
+
+/**
+ * One entry of a multi-query response, and it is a UNION on purpose.
+ *
+ * `results` present  →  we searched THIS query. `[]` means the index had
+ *                       nothing, exactly as a 200 + `[]` does on the single
+ *                       route.
+ * `code` present     →  we did NOT search this query. Never render it as
+ *                       "found nothing" — see `../search-unavailable.ts`.
+ *
+ * The two never appear together. A caller that reads `results` without first
+ * checking `code` gets `undefined`, not a misleading empty array: that is the
+ * shape doing the work the status code does on the single-query route.
+ */
+export type WebSearchBatchEntry =
+  | { query: string; results: WebSearchResultItem[] }
+  | { query: string; code: typeof SEARCH_UNAVAILABLE_CODE; reason: SearchUnavailableReason };
+
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 
 /** Brave's own per-request ceiling. */
@@ -37,6 +74,23 @@ interface BraveWebResult {
   title?: unknown;
   url?: unknown;
   description?: unknown;
+}
+
+/**
+ * Pulls the `reason` back out of a 503 built by `searchUnavailable`.
+ *
+ * Needed because `Promise.allSettled` hands back the thrown value and the batch
+ * path has to decide, per rejection, whether it describes the gateway (fail the
+ * whole request) or just this one query (report it as an entry). Anything that
+ * is not one of our own 503s — a timeout, an unclassified upstream status — has
+ * no reason of its own and returns `undefined`.
+ */
+function reasonOf(error: unknown): SearchUnavailableReason | undefined {
+  if (!(error instanceof ServiceUnavailableException)) return undefined;
+  const body = error.getResponse();
+  const reason =
+    typeof body === 'object' && body !== null ? (body as { reason?: unknown }).reason : undefined;
+  return typeof reason === 'string' ? (reason as SearchUnavailableReason) : undefined;
 }
 
 /**
@@ -84,21 +138,88 @@ export class WebSearchService {
     this.apiKey = this.configService.get<string>('BRAVE_SEARCH_API_KEY', '');
   }
 
+  /**
+   * One query. Unchanged contract: resolves to results (possibly `[]`, meaning
+   * we searched and Brave had nothing), or throws — 400 on length, 503 on any
+   * state where we did not search, and a plain Error the controller turns into
+   * a 502 for everything else.
+   */
   async search(query: string): Promise<WebSearchResultItem[]> {
-    const trimmed = (query ?? '').trim();
+    const trimmed = this.validateQuery(query);
+    this.assertAvailable();
+    return this.braveSearch(trimmed);
+  }
 
+  /**
+   * Several queries in ONE request, fanned out concurrently.
+   *
+   * WHY THIS EXISTS ON THE SERVER. The app funnels every gateway call through a
+   * shared FIFO that grants one caller every 3s, so N searches issued from the
+   * device are N × 3s of waiting no matter how concurrently the client writes
+   * them. Moving the fan-out here costs one grant and one round trip for the
+   * whole set. It does NOT reduce spend: N queries are still N billed Brave
+   * requests. `MAX_BATCH_QUERIES` is the ceiling.
+   *
+   * WHAT FAILS THE WHOLE REQUEST vs WHAT FAILS ONE ENTRY, and the line between
+   * them is "does this tell us anything about the other queries":
+   *   - length, gate off, key absent, key REJECTED → the whole request throws,
+   *     because every query in it was doomed for the same reason.
+   *   - a timeout, a 429, an unclassified upstream status → that ENTRY carries
+   *     `code`, and the queries that did succeed are still returned.
+   * An entry with `code` is "we did not search this", never "nothing found".
+   */
+  async searchMany(queries: string[]): Promise<WebSearchBatchEntry[]> {
+    if (!Array.isArray(queries) || queries.length === 0) {
+      throw new BadRequestException('queries must be a non-empty array');
+    }
+    if (queries.length > MAX_BATCH_QUERIES) {
+      throw new BadRequestException(`queries must contain at most ${MAX_BATCH_QUERIES} items`);
+    }
+
+    // Validate EVERY query before searching ANY of them. Half a batch billed
+    // and then rejected is the worst of both outcomes.
+    const trimmed = queries.map((q) => this.validateQuery(q));
+    this.assertAvailable();
+
+    const settled = await Promise.allSettled(trimmed.map((q) => this.braveSearch(q)));
+
+    // A rejected key is a property of the gateway, not of one query, so it
+    // fails the request rather than being reported four times over.
+    for (const outcome of settled) {
+      if (outcome.status === 'rejected' && reasonOf(outcome.reason) === 'upstream-rejected-key') {
+        throw outcome.reason;
+      }
+    }
+
+    return settled.map((outcome, i) => {
+      const query = trimmed[i];
+      if (outcome.status === 'fulfilled') return { query, results: outcome.value };
+      const reason = reasonOf(outcome.reason) ?? 'upstream-failed';
+      this.logger.warn(`batch entry ${i} unavailable (${reason})`);
+      return { query, code: SEARCH_UNAVAILABLE_CODE, reason };
+    });
+  }
+
+  /** Trim and bound-check. Throws 400; returns the trimmed query. */
+  private validateQuery(query: string): string {
+    const trimmed = (query ?? '').trim();
     if (trimmed.length < MIN_QUERY_LENGTH) {
       throw new BadRequestException(`Query must be at least ${MIN_QUERY_LENGTH} characters`);
     }
     if (trimmed.length > MAX_QUERY_LENGTH) {
       throw new BadRequestException(`Query must be at most ${MAX_QUERY_LENGTH} characters`);
     }
+    return trimmed;
+  }
 
-    // Kill switch AFTER validation but BEFORE the key is used or any request is
-    // made. 503, NOT `[]`: "the operator switched search off" and "Brave found
-    // nothing" must never be the same response. Degrading quietly was the
-    // original intent and it was the wrong trade — a client cannot render an
-    // honest "I could not search" from a success it was handed.
+  /**
+   * Kill switch AFTER validation but BEFORE the key is used or any request is
+   * made. 503, NOT `[]`: "the operator switched search off" and "Brave found
+   * nothing" must never be the same response. Degrading quietly was the
+   * original intent and it was the wrong trade — a client cannot render an
+   * honest "I could not search" from a success it was handed.
+   */
+  private assertAvailable(): void {
     if (!this.enabled) {
       this.logger.log('web search disabled (BRAVE_SEARCH_ENABLED is not true)');
       throw searchUnavailable('disabled', 'Web search is disabled on this gateway');
@@ -111,7 +232,10 @@ export class WebSearchService {
       this.logger.error('BRAVE_SEARCH_ENABLED is true but BRAVE_SEARCH_API_KEY is not configured');
       throw searchUnavailable('not-configured', 'Web search is not configured');
     }
+  }
 
+  /** One Brave round trip. Assumes validated input and an available gate. */
+  private async braveSearch(trimmed: string): Promise<WebSearchResultItem[]> {
     const count = Math.max(1, Math.min(BRAVE_MAX_COUNT, MAX_WEB_SEARCH_RESULTS));
     const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(trimmed)}&count=${count}`;
 

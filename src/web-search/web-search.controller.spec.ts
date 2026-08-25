@@ -11,11 +11,14 @@ import { WebSearchService } from './web-search.service';
 
 describe('WebSearchController', () => {
   let controller: WebSearchController;
-  let service: { search: jest.Mock };
+  let service: { search: jest.Mock; searchMany: jest.Mock };
 
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-    service = { search: jest.fn().mockResolvedValue([]) };
+    service = {
+      search: jest.fn().mockResolvedValue([]),
+      searchMany: jest.fn().mockResolvedValue([]),
+    };
     controller = new WebSearchController(service as unknown as WebSearchService);
   });
 
@@ -94,5 +97,36 @@ describe('WebSearchController', () => {
 
     const emitted = errorSpy.mock.calls.flat().join(' ');
     expect(emitted).not.toContain('distinctive-secret-terms');
+  });
+
+  describe('the two request shapes', () => {
+    it('routes a `queries` body to searchMany and wraps it in { searches }', async () => {
+      const entries = [{ query: 'alpha', results: [] }];
+      service.searchMany.mockResolvedValue(entries);
+
+      await expect(controller.webSearch({ queries: ['alpha'] })).resolves.toEqual({
+        searches: entries,
+      });
+      expect(service.searchMany).toHaveBeenCalledWith(['alpha']);
+      expect(service.search).not.toHaveBeenCalled();
+    });
+
+    // The fallback in the app keys on THIS 400: an app build newer than the
+    // gateway sends `queries`, the old ValidationPipe strips it, the body
+    // arrives empty and this is the answer that tells the client to retry one
+    // query at a time. Changing it to anything else strands that fallback.
+    it('400s an empty body rather than guessing a shape', async () => {
+      await expect(controller.webSearch({})).rejects.toBeInstanceOf(BadRequestException);
+      expect(service.search).not.toHaveBeenCalled();
+      expect(service.searchMany).not.toHaveBeenCalled();
+    });
+
+    it('400s a body carrying both shapes', async () => {
+      await expect(controller.webSearch({ query: 'a', queries: ['b'] })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(service.search).not.toHaveBeenCalled();
+      expect(service.searchMany).not.toHaveBeenCalled();
+    });
   });
 });
