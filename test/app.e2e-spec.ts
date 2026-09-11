@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import http from 'http';
 import { exportJWK, generateKeyPair } from 'jose';
+import { randomBytes } from 'crypto';
 
 describe('InferenceGateway (e2e)', () => {
   let app: INestApplication<App>;
@@ -43,6 +44,15 @@ describe('InferenceGateway (e2e)', () => {
     // and redis-store.e2e-spec.ts mutates the same process env.
     process.env.INFERENCE_JOBS_REDIS_URL =
       process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
+    // Throttle counters now live in Redis, so unlike the old in-memory store
+    // they OUTLIVE the process for the full window. Two runs inside 60s would
+    // otherwise share buckets and 429 mid-suite, which reads as a flake. A
+    // per-run prefix isolates both the throttle keys and the BullMQ queues.
+    process.env.BULLMQ_PREFIX = `e2e-${randomBytes(4).toString('hex')}`;
+    // This suite is not testing rate limiting; keep the limit clear of it.
+    // The behavioural throttle assertions live in throttle.e2e-spec.ts, which
+    // sets a LOW limit on purpose.
+    process.env.THROTTLE_LIMIT = '10000';
 
     const { AppModule } = require('./../src/app.module') as typeof import('./../src/app.module');
     const moduleFixture: TestingModule = await Test.createTestingModule({

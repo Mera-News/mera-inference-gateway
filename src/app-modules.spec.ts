@@ -111,4 +111,9 @@ describe('Feature modules are defined', () => {
     const { InferenceJobsModule } = require('./inference-jobs/inference-jobs.module');
     expect(InferenceJobsModule).toBeDefined();
   });
+
+  it('ThrottlingModule is defined', () => {
+    const { ThrottlingModule } = require('./throttling/throttling.module');
+    expect(ThrottlingModule).toBeDefined();
+  });
 });

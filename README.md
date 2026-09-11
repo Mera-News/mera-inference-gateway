@@ -198,7 +198,7 @@ At most 10 results per query. Every state in which the gateway did **not** reach
 | `200` | Success, including a genuine zero-hit search and a batch with some entries unavailable |
 | `400` | Trimmed query shorter than 2 or longer than 200 characters; neither or both of `query`/`queries` given; `queries` empty or longer than 4 |
 | `401` | Missing or invalid bearer token |
-| `429` | Per-IP throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`) |
+| `429` | Per-user throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`), counted per route and shared across instances; unauthenticated callers are counted per IP |
 | `502` | Brave unreachable or returned an unexpected non-2xx |
 | `503` | `{"code":"search-unavailable"}` — gate off, key unset, key rejected by Brave (401/403), or Brave throttled us (429). **No search happened.** |
 
@@ -241,7 +241,7 @@ Omitting `languageCode` is a deliberate, valid request, not a degraded one: the 
 | `200` | Success, including the honest empty |
 | `400` | Trimmed query shorter than 2 or longer than 300 characters, malformed `languageCode`, or `maxAgeDays` outside 1–3650 |
 | `401` | Missing or invalid bearer token |
-| `429` | Per-IP throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`) |
+| `429` | Per-user throttle (`THROTTLE_LIMIT` / `THROTTLE_TTL`), counted per route and shared across instances; unauthenticated callers are counted per IP |
 | `502` | Upstream unreachable or returned an unexpected non-2xx |
 | `503` | `{"code":"search-unavailable"}` — gate off, key unset, key rejected (401/403), or upstream throttled (429). **No lookup happened**, and it is not evidence that nobody checked the claim. |
 
@@ -331,12 +331,12 @@ cp .env.example .env
 | `NODE_ENV` | No | `development` | `development` or `production` |
 | `CORS_ORIGIN` | No | `http://localhost:8081` | Allowed CORS origin |
 | `THROTTLE_TTL` | No | `60` | Rate-limit window in seconds |
-| `THROTTLE_LIMIT` | No | `30` | Max requests per window |
-| `INFERENCE_MAX_CONCURRENCY` | No | `8` | In-memory concurrency for `/v1/chat/completions/batch` |
-| `INFERENCE_MAX_QUEUE_DEPTH` | No | `200` | Max queued+active items before batch returns 503 |
+| `THROTTLE_LIMIT` | No | `30` | Max requests per window, **per user and per route**. Falls back to per-IP only when the caller sends no usable bearer token |
+| `INFERENCE_MAX_CONCURRENCY` | No | `8` | In-memory concurrency for `/v1/chat/completions/batch`, **per instance** |
+| `INFERENCE_MAX_QUEUE_DEPTH` | No | `200` | Max queued+active items before batch returns 503, **per instance**. Keep roughly 25x `INFERENCE_MAX_CONCURRENCY`: the two are bounded together by `UPSTREAM_TIMEOUT_MS`, so raising this alone turns a fast 503 into a slow timeout |
 | `INFERENCE_BODY_LIMIT` | No | `50mb` | Express body-parser size limit |
 | `UPSTREAM_TIMEOUT_MS` | No | `120000` | NEAR AI request timeout in ms (tolerates a cold model on first request) |
-| `LLM_INFERENCE_CONCURRENCY` | No | `8` | BullMQ worker concurrency for `llm-inference` queue |
+| `LLM_INFERENCE_CONCURRENCY` | No | `8` | BullMQ worker concurrency for `llm-inference` queue, **per instance** (N instances run N x this against NEAR AI) |
 | `INFERENCE_JOBS_KEY_PREFIX` | No | `inf:` | Job-store Redis key namespace (`inf:stg:` on staging) |
 | `INFERENCE_JOBS_RESULT_TTL_SECONDS` | No | `86400` | TTL for the job hash + results (client re-fetch window) |
 | `INFERENCE_JOBS_BODY_TTL_SECONDS` | No | `7200` | TTL for request bodies (only needed while processing) |

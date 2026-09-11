@@ -45,14 +45,22 @@ jest.mock('nestjs-pino', () => ({
 // ---------------------------------------------------------------------------
 // 4. @nestjs/throttler mock
 // ---------------------------------------------------------------------------
+// NOTE: this mock must export EVERY symbol the module graph pulls from
+// @nestjs/throttler, not just the ones app.module.ts names. HealthController
+// is in `controllers` and imports SkipThrottle; a missing export here surfaces
+// as `SkipThrottle is not a function` at decoration time, far from the cause.
 jest.mock('@nestjs/throttler', () => ({
   ThrottlerModule: {
     forRootAsync: (opts: any) => {
       mockCapture.throttlerFactory = opts.useFactory;
+      mockCapture.throttlerOptions = opts;
       return { module: class ThrottlerModuleStub {} };
     },
   },
   ThrottlerGuard: class ThrottlerGuardStub {},
+  ThrottlerStorage: Symbol('ThrottlerStorage'),
+  SkipThrottle: () => () => {},
+  Throttle: () => () => {},
 }));
 
 // ---------------------------------------------------------------------------
@@ -270,23 +278,58 @@ describe('AppModule – LoggerModule useFactory', () => {
 // ---------------------------------------------------------------------------
 
 describe('AppModule – ThrottlerModule useFactory', () => {
+  const storage = { increment: jest.fn() };
+  const capabilityTokens = { verify: jest.fn() };
+  const build = (vals: Record<string, unknown>) =>
+    mockCapture.throttlerFactory(cfg(vals), storage, capabilityTokens);
+
   it('factory was captured (sanity)', () => {
     expect(typeof mockCapture.throttlerFactory).toBe('function');
   });
 
   it('returns default ttl=60000ms and limit=30 when no env vars set', () => {
-    const result = mockCapture.throttlerFactory(cfg({}));
-    expect(result).toEqual([{ ttl: 60_000, limit: 30 }]);
+    expect(build({}).throttlers).toEqual([{ ttl: 60_000, limit: 30 }]);
   });
 
   it('multiplies THROTTLE_TTL by 1000 to convert seconds to ms', () => {
-    const result = mockCapture.throttlerFactory(cfg({ THROTTLE_TTL: 5, THROTTLE_LIMIT: 100 }));
-    expect(result).toEqual([{ ttl: 5_000, limit: 100 }]);
+    const result = build({ THROTTLE_TTL: 5, THROTTLE_LIMIT: 100 });
+    expect(result.throttlers).toEqual([{ ttl: 5_000, limit: 100 }]);
   });
 
-  it('returns a single-element array (as ThrottlerModule expects)', () => {
-    const result = mockCapture.throttlerFactory(cfg({}));
-    expect(Array.isArray(result)).toBe(true);
-    expect(result).toHaveLength(1);
+  // ConfigService.get<number> does not coerce; env values arrive as strings.
+  it('coerces string env values to numbers', () => {
+    const result = build({ THROTTLE_TTL: '60', THROTTLE_LIMIT: '90' });
+    expect(result.throttlers).toEqual([{ ttl: 60_000, limit: 90 }]);
+    expect(typeof result.throttlers[0].limit).toBe('number');
+  });
+
+  // The OBJECT form is load-bearing: ThrottlerModule only honours a custom
+  // `storage` when options are an object. Returning an array (as this factory
+  // used to) silently reverts to the per-process in-memory Map.
+  it('returns the object form, not an array, so custom storage is honoured', () => {
+    const result = build({});
+    expect(Array.isArray(result)).toBe(false);
+    expect(result.storage).toBe(storage);
+  });
+
+  it('installs a tracker that buckets by user rather than by IP', () => {
+    const getTracker = build({}).getTracker;
+    expect(typeof getTracker).toBe('function');
+    const jwt = [
+      Buffer.from(JSON.stringify({ alg: 'EdDSA' })).toString('base64url'),
+      Buffer.from(JSON.stringify({ sub: 'user-77' })).toString('base64url'),
+      'sig',
+    ].join('.');
+    expect(getTracker({ headers: { authorization: `Bearer ${jwt}` }, ip: '9.9.9.9' })).toBe(
+      'u:user-77',
+    );
+    expect(getTracker({ headers: {}, ip: '9.9.9.9' })).toBe('ip:9.9.9.9');
+  });
+
+  it('imports the module providing the Redis storage', () => {
+    const names = (mockCapture.throttlerOptions.imports as Array<{ name: string }>).map(
+      (m) => m.name,
+    );
+    expect(names).toContain('ThrottlingModule');
   });
 });

@@ -4,6 +4,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module';
+import { CapabilityTokenService } from './auth/capability-token.service';
+import { ThrottlingModule } from './throttling/throttling.module';
+import { RedisThrottlerStorage } from './throttling/redis-throttler.storage';
+import { createThrottleTracker } from './throttling/throttle-tracker';
 import { ChatModule } from './chat/chat.module';
 import { AttestationModule } from './attestation/attestation.module';
 import { HealthController } from './health/health.controller';
@@ -97,14 +101,34 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
         };
       },
     }),
+    // Rate limiting is shared across instances (Redis) and keyed by user, not
+    // by IP. The object form is required: ThrottlerModule only honours a
+    // custom `storage` when options are an object -- pass an array and it
+    // silently falls back to the in-process Map, which is the bug this fixes.
+    //
+    // `getTracker` runs BEFORE AuthGuard (global guard vs controller-scoped),
+    // so it picks a bucket from the bearer token itself. See throttle-tracker.ts:
+    // the JWT read there is deliberately unverified and grants nothing.
     ThrottlerModule.forRootAsync({
-      useFactory: (configService: ConfigService) => [
-        {
-          ttl: configService.get<number>('THROTTLE_TTL', 60) * 1000,
-          limit: configService.get<number>('THROTTLE_LIMIT', 30),
-        },
-      ],
-      inject: [ConfigService],
+      imports: [ThrottlingModule, AuthModule],
+      useFactory: (
+        configService: ConfigService,
+        storage: RedisThrottlerStorage,
+        capabilityTokens: CapabilityTokenService,
+      ) => ({
+        throttlers: [
+          {
+            // ConfigService.get<number> does NOT coerce -- the generic is a
+            // type assertion over process.env strings. Without Number() a set
+            // THROTTLE_LIMIT arrives as a string and only works by accident.
+            ttl: Number(configService.get<number>('THROTTLE_TTL', 60)) * 1000,
+            limit: Number(configService.get<number>('THROTTLE_LIMIT', 30)),
+          },
+        ],
+        storage,
+        getTracker: createThrottleTracker(capabilityTokens),
+      }),
+      inject: [ConfigService, RedisThrottlerStorage, CapabilityTokenService],
     }),
     // Job-store composition root: binds JOB_STORE to the dedicated Redis
     // instance (INFERENCE_JOBS_REDIS_URL).
