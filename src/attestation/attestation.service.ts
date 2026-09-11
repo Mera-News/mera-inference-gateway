@@ -24,6 +24,69 @@ const ATTESTATION_CACHE_TTL_MS = 10 * 60 * 1000;
  *  the oldest entry on overflow. */
 const ATTESTATION_CACHE_MAX_ENTRIES = 20;
 
+/**
+ * The fields the app's HOT PATH reads from a model attestation entry
+ * (mera-app lib/e2ee/e2ee-service `fetchModelPublicKeyUncached`: the signing
+ * key it encrypts toward, its algo, and the signing address it records).
+ *
+ * The full upstream report is ~312KB per model: `intel_quote` (10KB),
+ * `nvidia_payload` (~98KB) and `info.app_compose` (~40KB), twice over (model
+ * attestation + gateway attestation). The app fetches three of them on every
+ * cold launch (primary + both fallbacks) before it can encrypt the first chat
+ * turn, over the user's mobile link, and reads 64 bytes of each. Only the
+ * user-initiated verify tap consumes the quote and the GPU payload, and that
+ * fetch always carries a `nonce` -- so a nonce-free request gets the slim
+ * projection and a nonce'd request gets the report verbatim. Nothing about
+ * the E2EE posture changes: the key material is passed through untouched.
+ */
+const HOT_PATH_ATTESTATION_FIELDS = [
+  'model_name',
+  'signing_address',
+  'signing_algo',
+  'signing_public_key',
+  'request_nonce',
+] as const;
+
+function pickFields(entry: unknown): Record<string, unknown> | null {
+  if (typeof entry !== 'object' || entry === null) return null;
+  const source = entry as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of HOT_PATH_ATTESTATION_FIELDS) {
+    if (source[field] !== undefined) out[field] = source[field];
+  }
+  return out;
+}
+
+/** Project a 200 report body down to the hot-path fields. Anything that is
+ *  not the expected shape (non-JSON, no `model_attestations` array) is
+ *  returned verbatim so a changed upstream format degrades to the old
+ *  behaviour, never to a broken client. */
+export function slimAttestationForHotPath(body: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return body;
+  const report = parsed as Record<string, unknown>;
+  if (!Array.isArray(report.model_attestations)) return body;
+
+  const slim: Record<string, unknown> = {
+    model_attestations: report.model_attestations
+      .map(pickFields)
+      .filter((e): e is Record<string, unknown> => e !== null),
+  };
+  const gateway = pickFields(report.gateway_attestation);
+  if (gateway) slim.gateway_attestation = gateway;
+  return JSON.stringify(slim);
+}
+
+/** A nonce'd fetch is the verify tap: it needs the quote and GPU payload. */
+function requestsFullReport(queryString: string): boolean {
+  return /(^|&)nonce=/.test(queryString);
+}
+
 @Injectable()
 export class AttestationService {
   private readonly logger = new Logger(AttestationService.name);
@@ -76,7 +139,8 @@ export class AttestationService {
         return upstream;
       }
 
-      const body = await upstream.text();
+      const rawBody = await upstream.text();
+      const body = requestsFullReport(queryString) ? rawBody : slimAttestationForHotPath(rawBody);
       const contentType = upstream.headers.get('content-type');
       const entry: CachedAttestation = {
         status: upstream.status,

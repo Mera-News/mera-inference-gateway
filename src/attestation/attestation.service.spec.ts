@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UPSTREAM_BASE_URL } from '../constants';
-import { AttestationService } from './attestation.service';
+import { AttestationService, slimAttestationForHotPath } from './attestation.service';
 
 function makeConfig(values: Record<string, unknown>): ConfigService {
   return {
@@ -127,6 +127,96 @@ describe('AttestationService', () => {
 
       const svc = new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
       await expect(svc.proxyAttestationReport('nonce=1')).rejects.toBe(err);
+    });
+
+    describe('hot-path projection', () => {
+      const fullReport = JSON.stringify({
+        gateway_attestation: {
+          signing_address: 'gw-addr',
+          signing_algo: 'ed25519',
+          intel_quote: 'Q'.repeat(10_000),
+          info: { app_compose: 'C'.repeat(40_000) },
+        },
+        model_attestations: [
+          {
+            model_name: 'Qwen/Qwen3.8-27B',
+            signing_address: 'addr',
+            signing_algo: 'ed25519',
+            signing_public_key: 'a'.repeat(64),
+            request_nonce: 'n'.repeat(64),
+            intel_quote: 'Q'.repeat(10_000),
+            nvidia_payload: 'N'.repeat(98_000),
+            event_log: [{ imr: 0 }],
+            info: { app_compose: 'C'.repeat(40_000) },
+          },
+        ],
+      });
+
+      it('projects a nonce-free 200 body down to the signing fields (key material untouched)', async () => {
+        fetchMock.mockResolvedValue(makeUpstream({ status: 200, body: fullReport }));
+        const svc = new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+
+        const result = await svc.proxyAttestationReport(
+          'model=Qwen%2FQwen3.8-27B&signing_algo=ed25519',
+        );
+        const text = await result.text();
+        const body = JSON.parse(text) as {
+          model_attestations: Record<string, unknown>[];
+          gateway_attestation: Record<string, unknown>;
+        };
+
+        expect(body.model_attestations).toEqual([
+          {
+            model_name: 'Qwen/Qwen3.8-27B',
+            signing_address: 'addr',
+            signing_algo: 'ed25519',
+            signing_public_key: 'a'.repeat(64),
+            request_nonce: 'n'.repeat(64),
+          },
+        ]);
+        expect(body.gateway_attestation).toEqual({
+          signing_address: 'gw-addr',
+          signing_algo: 'ed25519',
+        });
+        expect(text.length).toBeLessThan(600);
+        expect(fullReport.length).toBeGreaterThan(150_000);
+      });
+
+      it("passes a nonce'd request through verbatim -- the verify tap needs the quote", async () => {
+        fetchMock.mockResolvedValue(makeUpstream({ status: 200, body: fullReport }));
+        const svc = new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+
+        const result = await svc.proxyAttestationReport('model=x&signing_algo=ed25519&nonce=abc');
+
+        await expect(result.text()).resolves.toBe(fullReport);
+      });
+
+      it('caches the projected body, so a repeat hit is the slim one too', async () => {
+        fetchMock.mockResolvedValue(makeUpstream({ status: 200, body: fullReport }));
+        const svc = new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+
+        await svc.proxyAttestationReport('model=x');
+        const second = await svc.proxyAttestationReport('model=x');
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect((await second.text()).length).toBeLessThan(600);
+      });
+
+      it('leaves a body it does not recognise alone', () => {
+        expect(slimAttestationForHotPath('not json')).toBe('not json');
+        expect(slimAttestationForHotPath('{"ok":true}')).toBe('{"ok":true}');
+        expect(slimAttestationForHotPath('[1,2]')).toBe('[1,2]');
+        expect(slimAttestationForHotPath('{"model_attestations":"nope"}')).toBe(
+          '{"model_attestations":"nope"}',
+        );
+      });
+
+      it('drops a malformed attestation entry instead of throwing', () => {
+        const out = JSON.parse(
+          slimAttestationForHotPath('{"model_attestations":[null, 5, {"signing_public_key":"k"}]}'),
+        ) as { model_attestations: unknown[] };
+        expect(out.model_attestations).toEqual([{ signing_public_key: 'k' }]);
+      });
     });
 
     describe('caching', () => {
