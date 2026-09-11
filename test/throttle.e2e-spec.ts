@@ -29,6 +29,13 @@ describe('Rate limiting (e2e)', () => {
   let jwksServer: http.Server;
   let prefix: string;
   let redisUrl: string;
+  // This suite pins a deliberately LOW limit. jest runs the e2e files in ONE
+  // process (--runInBand), and redis-store.e2e-spec.ts sets no THROTTLE_LIMIT
+  // of its own, so leaking this would silently 429 whichever suite runs next.
+  // Current file ordering happens to be safe; that is incidental, not a
+  // guarantee. Snapshot and restore instead of relying on it.
+  const savedEnv: Record<string, string | undefined> = {};
+  const OWNED_ENV = ['THROTTLE_TTL', 'THROTTLE_LIMIT', 'BULLMQ_PREFIX'] as const;
 
   beforeAll(async () => {
     redisUrl = process.env.MERA_E2E_REDIS_URL ?? 'redis://localhost:6379';
@@ -57,6 +64,7 @@ describe('Rate limiting (e2e)', () => {
     process.env.INFERENCE_CAPABILITY_SECRET = 'a'.repeat(64);
     process.env.INFERENCE_REDIS_URL = redisUrl;
     process.env.INFERENCE_JOBS_REDIS_URL = redisUrl;
+    for (const key of OWNED_ENV) savedEnv[key] = process.env[key];
     process.env.BULLMQ_PREFIX = prefix;
     process.env.THROTTLE_TTL = '60';
     process.env.THROTTLE_LIMIT = String(LIMIT);
@@ -78,6 +86,11 @@ describe('Rate limiting (e2e)', () => {
     const keys = await cleanup.keys(`${prefix}:throttle:*`);
     if (keys.length > 0) await cleanup.del(...keys);
     await cleanup.quit();
+
+    for (const key of OWNED_ENV) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
   }, 30_000);
 
   /**
