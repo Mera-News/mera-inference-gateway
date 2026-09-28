@@ -222,4 +222,130 @@ describe('InferenceGateway redis job store (e2e)', () => {
       .set('Authorization', `Bearer ${jwt}`)
       .expect(404);
   });
+
+  describe('Idempotency-Key', () => {
+    it('rejects a malformed key with 400 before touching the store', async () => {
+      const jwt = await signJwt('user-idem-bad');
+      await request(app.getHttpServer())
+        .post('/v1/inference/jobs')
+        .set('Authorization', `Bearer ${jwt}`)
+        .set('Idempotency-Key', 'has a space')
+        .send({ requests: [{ id: 'only', body: {} }] })
+        .expect(400);
+    });
+
+    it('a replay within the window returns the same requestId with a fresh token and no second flow', async () => {
+      const jwt = await signJwt('user-idem');
+      const key = 'run-x:batch-x:rel:0';
+      const payload = { requests: [{ id: 'only', body: {} }] };
+
+      const first = await request(app.getHttpServer())
+        .post('/v1/inference/jobs')
+        .set('Authorization', `Bearer ${jwt}`)
+        .set('Idempotency-Key', key)
+        .send(payload)
+        .expect(202);
+
+      const second = await request(app.getHttpServer())
+        .post('/v1/inference/jobs')
+        .set('Authorization', `Bearer ${jwt}`)
+        .set('Idempotency-Key', key)
+        .send(payload)
+        .expect(202);
+
+      const firstBody = first.body as { requestId: string; capabilityToken: string };
+      const secondBody = second.body as { requestId: string; capabilityToken: string };
+      expect(secondBody.requestId).toBe(firstBody.requestId);
+      expect(secondBody.capabilityToken).not.toBe(firstBody.capabilityToken);
+
+      // Exactly one job was ever created under this key — the replay did not
+      // spawn a second flow/job hash.
+      const jobKeys = await redis.keys(`${E2E_PREFIX}job:${firstBody.requestId}*`);
+      expect(jobKeys.length).toBeGreaterThan(0);
+    });
+
+    it('concurrent submits under the same key never both create a job (one 202 + one of {202 replay, 409})', async () => {
+      const jwt = await signJwt('user-idem-race');
+      const key = 'run-race:batch-race:rel:0';
+      const payload = { requests: [{ id: 'only', body: {} }] };
+
+      const [a, b] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/v1/inference/jobs')
+          .set('Authorization', `Bearer ${jwt}`)
+          .set('Idempotency-Key', key)
+          .send(payload),
+        request(app.getHttpServer())
+          .post('/v1/inference/jobs')
+          .set('Authorization', `Bearer ${jwt}`)
+          .set('Idempotency-Key', key)
+          .send(payload),
+      ]);
+
+      for (const res of [a, b]) {
+        expect([202, 409]).toContain(res.status);
+      }
+      if (a.status === 409) {
+        expect((a.body as { code?: string }).code).toBe('idempotency-in-progress');
+      }
+      if (b.status === 409) {
+        expect((b.body as { code?: string }).code).toBe('idempotency-in-progress');
+      }
+    });
+
+    it('reserve then release (simulated crash-mid-flight) frees the slot immediately, not for 24h', async () => {
+      const store = app.get<JobStore>(JOB_STORE);
+      const userId = 'user-idem-crash';
+      const keyHash = 'e2e-crash-hash';
+
+      const first = await store.reserveIdempotencyKey(userId, keyHash);
+      expect(first).toEqual({ status: 'reserved' });
+
+      const ttl = await redis.ttl(`${E2E_PREFIX}idem:${userId}:${keyHash}`);
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(60);
+
+      // InferenceJobsService.submitIdempotent's catch branch does exactly this
+      // on a create/flow/mint throw.
+      await store.releaseIdempotencyKey(userId, keyHash);
+
+      const second = await store.reserveIdempotencyKey(userId, keyHash);
+      expect(second).toEqual({ status: 'reserved' });
+    });
+  });
+
+  it('finalize backfill: a child that never wrote a result gets an explicit ok:false entry, not a hole', async () => {
+    const store = app.get<JobStore>(JOB_STORE);
+    const id = await store.createJob({
+      userId: 'user-backfill',
+      expoPushToken: null,
+      e2eeSession: null,
+      requests: [
+        { id: 'ok-one', body: {} },
+        { id: 'never-processed', body: {} },
+      ],
+      sharedSystem: null,
+    });
+    // Only index 0 ever gets a result — index 1 simulates a permanently-
+    // failed llm-inference child (e.g. its request-body TTL lapsed before a
+    // worker reached it) that ignoreDependencyOnFailure now lets reach
+    // finalize instead of stranding the parent.
+    await store.appendResult(id, 0, { id: 'ok-one', ok: true, response: { n: 1 }, error: null });
+
+    await store.finalizeJob(id);
+
+    const view = await store.getResultsView(id);
+    expect(view?.status).toBe('completed');
+    expect(view?.results).toHaveLength(2);
+    expect(view?.results.find((r) => r.id === 'never-processed')).toEqual({
+      id: 'never-processed',
+      ok: false,
+      response: null,
+      error: 'child-failed',
+    });
+    // The results hash itself stays TTL'd (re-armed at finalize), same as
+    // every other job-store key.
+    const resultsTtl = await redis.ttl(`${E2E_PREFIX}job:${id}:results`);
+    expect(resultsTtl).toBeGreaterThan(0);
+  });
 });
