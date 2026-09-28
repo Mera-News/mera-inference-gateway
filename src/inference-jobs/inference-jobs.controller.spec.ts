@@ -54,7 +54,7 @@ describe('InferenceJobsController', () => {
       const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
       const out = await controller.submit(req, dto as never);
       expect(out.requestId).toBe(VALID_ID);
-      expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto);
+      expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, undefined);
     });
 
     it('rejects a capability token lacking jobs:submit-followup scope', async () => {
@@ -89,6 +89,44 @@ describe('InferenceJobsController', () => {
       });
       await expect(controller.submit(req, dto as never)).resolves.toBeDefined();
       expect(jobsService.submit).toHaveBeenCalled();
+    });
+
+    describe('Idempotency-Key header', () => {
+      it('rejects a malformed key with 400 before the service is touched', async () => {
+        const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
+
+        await expect(
+          controller.submit(req, dto as never, 'has a space'),
+        ).rejects.toThrow(BadRequestException);
+        expect(jobsService.submit).not.toHaveBeenCalled();
+      });
+
+      it('rejects a key over 128 characters', async () => {
+        const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
+
+        await expect(
+          controller.submit(req, dto as never, 'a'.repeat(129)),
+        ).rejects.toThrow(BadRequestException);
+        expect(jobsService.submit).not.toHaveBeenCalled();
+      });
+
+      it('passes a valid key through verbatim', async () => {
+        jobsService.submit.mockResolvedValue({ requestId: VALID_ID, capabilityToken: 'mc.x.y' });
+        const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
+        const key = 'run-1:batch-1:rel:0';
+
+        await controller.submit(req, dto as never, key);
+
+        expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, key);
+      });
+
+      it('accepts the full allowed character set (alnum, colon, underscore, hyphen)', async () => {
+        jobsService.submit.mockResolvedValue({ requestId: VALID_ID, capabilityToken: 'mc.x.y' });
+        const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
+        const key = 'Az09:_-';
+
+        await expect(controller.submit(req, dto as never, key)).resolves.toBeDefined();
+      });
     });
   });
 

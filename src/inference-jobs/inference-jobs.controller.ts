@@ -4,6 +4,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Headers,
   HttpCode,
   Inject,
   Logger,
@@ -23,6 +24,11 @@ import { InferenceJobsService } from './inference-jobs.service';
 import { SubmitJobDto } from './dto/submit-job.dto';
 import { JOB_STORE, type JobStore } from './job-store.port';
 
+// Validated before the raw header value is ever sha256-hashed into a Redis
+// key — bounds length and character set so no client string can shape key
+// syntax, independent of the fact that only the hash is ever used as a key.
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+
 @Controller('v1/inference')
 @UseGuards(AuthGuard)
 export class InferenceJobsController {
@@ -38,6 +44,7 @@ export class InferenceJobsController {
   async submit(
     @Req() req: AuthenticatedRequest,
     @Body() dto: SubmitJobDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<{ requestId: string; capabilityToken: string }> {
     // Capability-token authed callers (phase-2 chain from background) must
     // hold the `jobs:submit-followup` scope. The original submit always
@@ -47,7 +54,14 @@ export class InferenceJobsController {
         throw new ForbiddenException('Capability token missing jobs:submit-followup scope');
       }
     }
-    return this.jobs.submit(req.user.id, dto);
+    // Optional: a missing header behaves exactly as before this feature
+    // existed. When present, format is checked before anything touches
+    // Redis — the service only ever sees a validated string, which it then
+    // sha256-hashes before using it as a key.
+    if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
+      throw new BadRequestException('Invalid Idempotency-Key');
+    }
+    return this.jobs.submit(req.user.id, dto, idempotencyKey);
   }
 
   @Get('jobs/:requestId/results')
