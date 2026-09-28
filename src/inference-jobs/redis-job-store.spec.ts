@@ -37,6 +37,10 @@ function makeRedisMock(pipelineReplies: unknown[] = []) {
     appendJobResult: jest.fn().mockResolvedValue(1),
     finalizeJob: jest.fn(),
     hmget: jest.fn(),
+    // Direct (non-pipeline) commands used by the idempotency methods.
+    set: jest.fn(),
+    get: jest.fn(),
+    del: jest.fn(),
     ping: jest.fn().mockResolvedValue('PONG'),
     _pipelineObj: pipeline,
   };
@@ -91,6 +95,7 @@ describe('RedisJobStore', () => {
         expoPushToken: 'ExponentPushToken[t]',
         e2eeSession: JSON.stringify({ 'X-Signing-Algo': 'ed' }),
         sharedSystem: 'CIPHER',
+        requestIds: JSON.stringify(['a', 'b']),
       });
 
       expect(expireCall).toEqual(['expire', `inf:job:${id}`, 86_400]);
@@ -244,6 +249,22 @@ describe('RedisJobStore', () => {
       const store = new RedisJobStore(redis as never, OPTS);
       await expect(store.finalizeJob('c'.repeat(24))).resolves.toBeNull();
     });
+
+    it('passes jobKey, resultsKey, an ISO completedAt and resultTtlSeconds to the Lua command', async () => {
+      const redis = makeRedisMock();
+      redis.finalizeJob.mockResolvedValue(['1', 1]);
+      const store = new RedisJobStore(redis as never, OPTS);
+      const id = 'c'.repeat(24);
+
+      await store.finalizeJob(id);
+
+      expect(redis.finalizeJob).toHaveBeenCalledWith(
+        `inf:job:${id}`,
+        `inf:job:${id}:results`,
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        '86400',
+      );
+    });
   });
 
   describe('getResultsView', () => {
@@ -324,6 +345,95 @@ describe('RedisJobStore', () => {
       redis.ping.mockRejectedValue(new Error('ECONNREFUSED'));
       const store = new RedisJobStore(redis as never, OPTS);
       await expect(store.ping()).rejects.toThrow('ECONNREFUSED');
+    });
+  });
+
+  describe('idempotency', () => {
+    describe('reserveIdempotencyKey', () => {
+      it('reserves with SET NX EX 60 when the key is free', async () => {
+        const redis = makeRedisMock();
+        redis.set.mockResolvedValue('OK');
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await expect(store.reserveIdempotencyKey('user-1', 'hash-a')).resolves.toEqual({
+          status: 'reserved',
+        });
+        expect(redis.set).toHaveBeenCalledWith('inf:idem:user-1:hash-a', '', 'EX', 60, 'NX');
+        expect(redis.get).not.toHaveBeenCalled();
+      });
+
+      it('reports in-progress when the reservation placeholder is still there', async () => {
+        const redis = makeRedisMock();
+        redis.set.mockResolvedValue(null);
+        redis.get.mockResolvedValue('');
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await expect(store.reserveIdempotencyKey('user-1', 'hash-a')).resolves.toEqual({
+          status: 'in-progress',
+        });
+      });
+
+      it('returns the existing requestId when the key already finalized', async () => {
+        const redis = makeRedisMock();
+        redis.set.mockResolvedValue(null);
+        redis.get.mockResolvedValue('a'.repeat(24));
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await expect(store.reserveIdempotencyKey('user-1', 'hash-a')).resolves.toEqual({
+          status: 'exists',
+          requestId: 'a'.repeat(24),
+        });
+      });
+
+      it('retries the reservation once when the key vanished between the failed SET and the GET', async () => {
+        const redis = makeRedisMock();
+        redis.set.mockResolvedValueOnce(null).mockResolvedValueOnce('OK');
+        redis.get.mockResolvedValueOnce(null);
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await expect(store.reserveIdempotencyKey('user-1', 'hash-a')).resolves.toEqual({
+          status: 'reserved',
+        });
+        expect(redis.set).toHaveBeenCalledTimes(2);
+      });
+
+      it('falls back to in-progress if the race repeats past the single retry', async () => {
+        const redis = makeRedisMock();
+        redis.set.mockResolvedValue(null);
+        redis.get.mockResolvedValue(null);
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await expect(store.reserveIdempotencyKey('user-1', 'hash-a')).resolves.toEqual({
+          status: 'in-progress',
+        });
+      });
+    });
+
+    describe('finalizeIdempotencyKey', () => {
+      it('overwrites the reservation with the requestId, TTL reset to resultTtlSeconds', async () => {
+        const redis = makeRedisMock();
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await store.finalizeIdempotencyKey('user-1', 'hash-a', 'req-123');
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'inf:idem:user-1:hash-a',
+          'req-123',
+          'EX',
+          86_400,
+        );
+      });
+    });
+
+    describe('releaseIdempotencyKey', () => {
+      it('deletes the reservation', async () => {
+        const redis = makeRedisMock();
+        const store = new RedisJobStore(redis as never, OPTS);
+
+        await store.releaseIdempotencyKey('user-1', 'hash-a');
+
+        expect(redis.del).toHaveBeenCalledWith('inf:idem:user-1:hash-a');
+      });
     });
   });
 

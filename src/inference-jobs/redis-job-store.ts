@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   CreateJobInput,
+  IdempotencyReservation,
   JobPayloadTooLargeError,
   JobResult,
   JobStatus,
@@ -10,6 +11,11 @@ import {
   RequestContext,
   ResultsView,
 } from './job-store.port';
+
+/** Fixed, not configurable via env — matches the approved bgsubmit design:
+ *  long enough to cover create/flow/mint, short enough that a crashed
+ *  reserver never blocks a retry for anywhere near the 24h job window. */
+const IDEMPOTENCY_RESERVATION_TTL_SECONDS = 60;
 
 export interface RedisJobStoreOptions {
   /** Namespace for every key, e.g. `inf:` (prod) / `inf:stg:` (staging). */
@@ -23,14 +29,20 @@ export interface RedisJobStoreOptions {
 }
 
 /**
- * Redis lives on the dedicated inference-redis Memorystore instance
- * (volatile-ttl): every key written here MUST carry a TTL, both for cleanup
- * (this replaces the Mongo TTL index) and because eviction order depends on it.
+ * Redis lives on the shared, consolidated news-persistent-redis Memorystore
+ * instance (volatile-ttl) — not a dedicated inference instance; the same
+ * instance also holds async's caches and graphql's cache under their own
+ * prefixes. Every key written here MUST carry a TTL, both for cleanup (this
+ * replaces the Mongo TTL index) and because eviction order depends on it.
  *
  * Key layout per job (24-hex id minted from crypto.randomBytes):
- *   {prefix}job:{id}          HASH   metadata + status + completedCount
+ *   {prefix}job:{id}          HASH   metadata + status + completedCount + requestIds
  *   {prefix}job:{id}:req:{i}  STRING JSON {id, body} (E2EE ciphertext)
  *   {prefix}job:{id}:results  HASH   field {i} -> JSON {id, ok, response, error}
+ *   {prefix}idem:{u}:{hash}   STRING "" while reserved (60s TTL), else the
+ *                                    finalized requestId (24h TTL, same as
+ *                                    the job hash) — see reserve/finalize/
+ *                                    releaseIdempotencyKey below.
  *
  * All request-path reads are exact-key point lookups — no SCAN, and the
  * prefix is applied server-side only, never derived from client input.
@@ -60,12 +72,46 @@ export class RedisJobStore implements JobStore {
       `,
     });
 
+    // Finalize: mark the job completed, and backfill an explicit
+    // {ok:false, error:'child-failed'} entry (HSETNX — never overwrites a
+    // real result) for every index missing from the results hash. Without
+    // this, a permanently-failed llm-inference child (now allowed to reach
+    // finalize via ignoreDependencyOnFailure on the flow's children) would
+    // leave a silent hole instead of a readable per-id error, which is what
+    // makes this safe for old clients that just walk the entries they get.
+    // requestIds (stored on the job hash at createJob) recovers the real id
+    // per missing index; a job written before that field existed, or one
+    // whose id array is somehow unparsable, backfills id:null instead of
+    // failing the whole finalize.
     this.redis.defineCommand('finalizeJob', {
       numberOfKeys: 2,
       lua: `
         if redis.call('EXISTS', KEYS[1]) == 0 then return nil end
+        local requestCount = tonumber(redis.call('HGET', KEYS[1], 'requestCount')) or 0
+        local idsJson = redis.call('HGET', KEYS[1], 'requestIds')
+        local ids = {}
+        if idsJson then
+          local ok, decoded = pcall(cjson.decode, idsJson)
+          if ok and type(decoded) == 'table' then ids = decoded end
+        end
+        for i = 0, requestCount - 1 do
+          local field = tostring(i)
+          if redis.call('HEXISTS', KEYS[2], field) == 0 then
+            local rid = ids[i + 1]
+            local payload = cjson.encode({
+              id = rid or cjson.null,
+              ok = false,
+              response = cjson.null,
+              error = 'child-failed',
+            })
+            redis.call('HSETNX', KEYS[2], field, payload)
+          end
+        end
+        if requestCount > 0 then
+          redis.call('EXPIRE', KEYS[2], ARGV[2])
+        end
         redis.call('HSET', KEYS[1], 'status', 'completed', 'completedAt', ARGV[1])
-        return {redis.call('HGET', KEYS[1], 'requestCount'), redis.call('HLEN', KEYS[2])}
+        return {tostring(requestCount), redis.call('HLEN', KEYS[2])}
       `,
     });
   }
@@ -105,6 +151,10 @@ export class RedisJobStore implements JobStore {
       requestCount: String(input.requests.length),
       completedCount: '0',
       createdAt: new Date().toISOString(),
+      // Tiny compared to the bodies (ids only, no ciphertext) — rides the
+      // job hash's own 24h TTL so finalize can still label a permanently-
+      // failed child by id after its :req:{i} body key (2h TTL) is gone.
+      requestIds: JSON.stringify(input.requests.map((r) => r.id)),
     };
     if (input.expoPushToken) hash.expoPushToken = input.expoPushToken;
     if (input.e2eeSession) hash.e2eeSession = JSON.stringify(input.e2eeSession);
@@ -166,6 +216,7 @@ export class RedisJobStore implements JobStore {
       this.jobKey(jobId),
       this.resultsKey(jobId),
       new Date().toISOString(),
+      String(this.opts.resultTtlSeconds),
     );
     if (!reply) return null;
     const [requestCount, resultCount] = reply;
@@ -201,6 +252,39 @@ export class RedisJobStore implements JobStore {
     return { expoPushToken: expoPushToken ?? null };
   }
 
+  private idemKey(userId: string, keyHash: string): string {
+    return `${this.opts.keyPrefix}idem:${userId}:${keyHash}`;
+  }
+
+  async reserveIdempotencyKey(userId: string, keyHash: string): Promise<IdempotencyReservation> {
+    const key = this.idemKey(userId, keyHash);
+
+    // NX wins the reservation outright. A loss needs a GET to tell
+    // in-progress ("") from finalized (a requestId) apart; if that GET finds
+    // nothing, our failed SET and this GET raced a reservation that expired
+    // (60s TTL) or was released between them — retry once, since the slot is
+    // genuinely free again, rather than reporting a false in-progress.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const set = await this.redis.set(key, '', 'EX', IDEMPOTENCY_RESERVATION_TTL_SECONDS, 'NX');
+      if (set === 'OK') return { status: 'reserved' };
+
+      const value = await this.redis.get(key);
+      if (value === null) continue; // raced out — one more try
+      return value === '' ? { status: 'in-progress' } : { status: 'exists', requestId: value };
+    }
+    // Vanishingly unlikely (two full races back to back); treat as
+    // in-progress rather than silently double-submitting.
+    return { status: 'in-progress' };
+  }
+
+  async finalizeIdempotencyKey(userId: string, keyHash: string, requestId: string): Promise<void> {
+    await this.redis.set(this.idemKey(userId, keyHash), requestId, 'EX', this.opts.resultTtlSeconds);
+  }
+
+  async releaseIdempotencyKey(userId: string, keyHash: string): Promise<void> {
+    await this.redis.del(this.idemKey(userId, keyHash));
+  }
+
   async ping(): Promise<void> {
     await this.redis.ping();
   }
@@ -231,6 +315,7 @@ declare module 'ioredis' {
       jobKey: string,
       resultsKey: string,
       completedAt: string,
+      resultTtlSeconds: string,
     ): Promise<[string, number] | null>;
   }
 }

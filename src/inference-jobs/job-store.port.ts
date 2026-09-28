@@ -1,8 +1,10 @@
 /**
  * Storage port for the async inference-job buffer. One adapter exists:
- * RedisJobStore (dedicated Memorystore instance). The composition root
- * (JobStoreModule) binds it; everything else — controller, service,
- * processors — depends only on this interface.
+ * RedisJobStore, on the shared, consolidated `news-persistent-redis`
+ * Memorystore instance (volatile-ttl — not a dedicated inference instance;
+ * it also holds async's caches and graphql's cache under their own
+ * prefixes). The composition root (JobStoreModule) binds it; everything
+ * else — controller, service, processors — depends only on this interface.
  *
  * Access-control invariant: every view that can reach a client response
  * (results, notify) carries the owning `userId` non-optionally, so an adapter
@@ -20,7 +22,9 @@ export interface JobRequest {
 }
 
 export interface JobResult {
-  id: string;
+  /** Null only for a finalize-time backfill entry whose original request id
+   *  could no longer be recovered (the id array itself expired/was absent). */
+  id: string | null;
   ok: boolean;
   /** Upstream JSON (still E2EE ciphertext inside); explicit null on failure. */
   response: unknown;
@@ -58,6 +62,20 @@ export class JobPayloadTooLargeError extends Error {
   }
 }
 
+/**
+ * Outcome of reserving an idempotency key at submit time:
+ * - `reserved`: no prior attempt under this key; caller now owns the slot
+ *   and must finalize (success) or release (throw) it.
+ * - `in-progress`: another attempt under this key is still mid-flight
+ *   (reserved but not yet finalized) — the caller should answer 409.
+ * - `exists`: a prior attempt under this key already finalized; reuse its
+ *   requestId instead of creating a new job.
+ */
+export type IdempotencyReservation =
+  | { status: 'reserved' }
+  | { status: 'in-progress' }
+  | { status: 'exists'; requestId: string };
+
 export interface JobStore {
   /** Persist a new job and return its requestId (24-hex, ObjectId-shaped). */
   createJob(input: CreateJobInput): Promise<string>;
@@ -79,6 +97,22 @@ export interface JobStore {
 
   /** Push-notification target. Null if the job is unknown/expired. */
   getNotifyInfo(jobId: string): Promise<{ expoPushToken: string | null } | null>;
+
+  /**
+   * Reserve `keyHash` (already sha256'd by the caller) for `userId` with a
+   * short (60s) TTL. See `IdempotencyReservation` for the outcomes.
+   */
+  reserveIdempotencyKey(userId: string, keyHash: string): Promise<IdempotencyReservation>;
+
+  /** Record the finished job's requestId against the reservation, TTL'd to
+   *  the same window as the job itself (so a replay is possible for as long
+   *  as the job's own results are). */
+  finalizeIdempotencyKey(userId: string, keyHash: string, requestId: string): Promise<void>;
+
+  /** Free a reservation that never finalized (create/flow/mint threw), so a
+   *  retry under the same key isn't blocked for the rest of the reservation
+   *  TTL. */
+  releaseIdempotencyKey(userId: string, keyHash: string): Promise<void>;
 
   /** Liveness probe of the backing store; rejects when unreachable. */
   ping(): Promise<void>;
