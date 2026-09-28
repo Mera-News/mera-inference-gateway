@@ -51,15 +51,31 @@ describe('FlowService', () => {
       // Assert children count
       expect(flowArg.children).toHaveLength(3);
 
-      // Assert each child's shape
+      // Assert each child's shape — children opts extend DEFAULT_JOB_OPTS
+      // with ignoreDependencyOnFailure so a permanently-failed child can't
+      // strand the finalize-job parent in waiting-children forever.
       for (let i = 0; i < 3; i++) {
         expect(flowArg.children[i]).toEqual({
           name: 'llm-inference',
           queueName: LLM_INFERENCE_QUEUE,
           data: { jobId: 'J', requestIndex: i },
-          opts: DEFAULT_JOB_OPTS,
+          opts: { ...DEFAULT_JOB_OPTS, ignoreDependencyOnFailure: true },
         });
       }
+    });
+
+    it('sets ignoreDependencyOnFailure on children but not on the parent', async () => {
+      await service.createInferenceFlow({ jobId: 'J', requestCount: 1 });
+
+      const [flowArg] = flowProducerMock.add.mock.calls[0] as [
+        {
+          opts: Record<string, unknown>;
+          children: Array<{ opts: Record<string, unknown> }>;
+        },
+      ];
+
+      expect(flowArg.opts).not.toHaveProperty('ignoreDependencyOnFailure');
+      expect(flowArg.children[0].opts.ignoreDependencyOnFailure).toBe(true);
     });
 
     it('produces an empty children array when requestCount=0', async () => {
@@ -90,7 +106,7 @@ describe('FlowService', () => {
         name: 'llm-inference',
         queueName: LLM_INFERENCE_QUEUE,
         data: { jobId: 'J', requestIndex: 0 },
-        opts: DEFAULT_JOB_OPTS,
+        opts: { ...DEFAULT_JOB_OPTS, ignoreDependencyOnFailure: true },
       });
     });
   });

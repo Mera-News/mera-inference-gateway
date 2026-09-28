@@ -80,7 +80,10 @@ export class LlmInferenceProcessor extends WorkerHost {
     // BullMQ's returnvalue.
     await this.store.appendResult(jobId, requestIndex, result);
 
-    return { id: result.id, ok: result.ok };
+    // request.id (not result.id): always a real string on this path —
+    // result.id is only ever null for a finalize-time backfill entry, which
+    // never flows through this processor.
+    return { id: request.id, ok: result.ok };
   }
 }
 

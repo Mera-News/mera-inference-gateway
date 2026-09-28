@@ -27,6 +27,16 @@ export class FlowService {
    * children. Each child carries only `{ jobId, requestIndex }` — the actual
    * request body is pulled from the job store (Redis) by the worker. Keeps
    * BullMQ payloads tiny and centralises the source of truth in the job store.
+   *
+   * Children carry `ignoreDependencyOnFailure: true` — without it, a child
+   * that exhausts its attempts leaves the parent stuck in `waiting-children`
+   * forever (BullMQ's default), which means `removeOnComplete`/`removeOnFail`
+   * never fire on it (an unbounded key on the noeviction BullMQ Redis) and
+   * the job store never reaches `completed`. With it, a permanently-failed
+   * child just moves to the parent's failed-dependencies list and finalize
+   * still runs; `finalizeJob`'s Lua backfills that index with an explicit
+   * `{ok:false, error:'child-failed'}` entry (see RedisJobStore) instead of
+   * leaving it a silent hole. Parent opts are unchanged.
    */
   async createInferenceFlow(params: CreateInferenceFlowParams): Promise<void> {
     const { jobId, requestCount } = params;
@@ -40,7 +50,7 @@ export class FlowService {
         name: 'llm-inference',
         queueName: LLM_INFERENCE_QUEUE,
         data: { jobId, requestIndex },
-        opts: DEFAULT_JOB_OPTS,
+        opts: { ...DEFAULT_JOB_OPTS, ignoreDependencyOnFailure: true },
       })),
     });
 
