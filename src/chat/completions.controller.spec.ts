@@ -753,3 +753,33 @@ describe('CompletionsController (deadline + client disconnect, real queue)', () 
     expect(res.json).toHaveBeenCalledWith({ error: 'Upstream request failed' });
   });
 });
+
+describe('upstreamErrorMessage', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { upstreamErrorMessage, UPSTREAM_ERROR_LOG_CAP } =
+    require('./completions.controller') as typeof import('./completions.controller');
+
+  it('keeps only the provider message, capped and on one line', () => {
+    expect(
+      upstreamErrorMessage(
+        JSON.stringify({
+          error: {
+            message: "Provider failed for model 'm': Decryption failed",
+            type: 'x',
+            echo: 'SENTINEL',
+          },
+        }),
+      ),
+    ).toBe("Provider failed for model 'm': Decryption failed");
+    expect(upstreamErrorMessage(JSON.stringify({ message: 'a\nb' }))).toBe('a b');
+    const long = upstreamErrorMessage(JSON.stringify({ error: 'x'.repeat(500) }));
+    expect(long.length).toBe(UPSTREAM_ERROR_LOG_CAP + 1);
+  });
+
+  it('never returns raw text', () => {
+    expect(upstreamErrorMessage('<html>SENTINEL</html>')).toBe('(unparsed upstream error body)');
+    expect(upstreamErrorMessage(JSON.stringify({ detail: 'SENTINEL' }))).toBe(
+      '(no upstream error message)',
+    );
+  });
+});

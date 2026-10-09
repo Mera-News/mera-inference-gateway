@@ -25,6 +25,28 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // `code` / `resetAt` / `limit`). Forwarded so clients can act on them.
     let extra: Record<string, unknown> = {};
 
+    // A body that failed to parse. body-parser's SyntaxError message carries a
+    // fragment of the body itself ("Unexpected token ... "<text>" is not valid
+    // JSON"), so neither its message nor its stack is logged or returned.
+    if (isBodyParseError(exception)) {
+      this.logger.warn(
+        {
+          statusCode: 400,
+          path: request.url,
+          method: request.method,
+          error: 'request body is not valid JSON',
+        },
+        `HTTP 400 ${request.method} ${request.url}`,
+      );
+      response.status(400).json({
+        statusCode: 400,
+        timestamp: new Date().toISOString(),
+        path: request.url,
+        message: 'Request body is not valid JSON',
+      });
+      return;
+    }
+
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
@@ -76,4 +98,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     response.status(status).json(errorResponse);
   }
+}
+
+/** body-parser marks its parse failures `type: 'entity.parse.failed'`; Nest
+ *  can also see the bare SyntaxError, or a BadRequestException wrapping it. */
+function isBodyParseError(exception: unknown): boolean {
+  if (exception === null || typeof exception !== 'object') return false;
+  const e = exception as { type?: unknown; body?: unknown; cause?: unknown };
+  if (e.type === 'entity.parse.failed') return true;
+  if (exception instanceof SyntaxError && 'body' in e) return true;
+  return e.cause !== undefined && e.cause !== exception && isBodyParseError(e.cause);
 }

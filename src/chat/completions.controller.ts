@@ -29,6 +29,33 @@ interface UpstreamCompletion {
   }>;
 }
 
+/** Longest upstream error message ever logged. */
+export const UPSTREAM_ERROR_LOG_CAP = 200;
+
+/**
+ * The provider's own `error.message` (or top-level `message`) from an error
+ * body, capped, with newlines flattened. Anything that is not that JSON shape
+ * logs as a fixed placeholder, never as raw text.
+ */
+export function upstreamErrorMessage(body: string): string {
+  let message: unknown;
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { message?: unknown } | string;
+      message?: unknown;
+    };
+    message =
+      typeof parsed.error === 'object' && parsed.error !== null
+        ? parsed.error.message
+        : (parsed.error ?? parsed.message);
+  } catch {
+    return '(unparsed upstream error body)';
+  }
+  if (typeof message !== 'string' || message.length === 0) return '(no upstream error message)';
+  const flat = message.replace(/\s+/g, ' ');
+  return flat.length > UPSTREAM_ERROR_LOG_CAP ? `${flat.slice(0, UPSTREAM_ERROR_LOG_CAP)}…` : flat;
+}
+
 @Controller('v1')
 @UseGuards(AuthGuard)
 export class CompletionsController {
@@ -66,13 +93,13 @@ export class CompletionsController {
         }
       });
 
-      // Non-2xx from upstream: read full body, log it, then forward. Safe because
-      // errors are never streamed (content-length is set by upstream) and E2EE
-      // never applies to error envelopes.
+      // Non-2xx from upstream: read full body, forward it, and log ONLY the
+      // parsed error message, capped. The raw body is never logged: an error
+      // envelope is not E2EE and nothing guarantees it cannot echo request text.
       if (!upstream.ok) {
         const errorBody = await upstream.text();
         this.logger.error(
-          `Upstream error user=${userId ?? 'unknown'} status=${upstream.status} body=${errorBody.slice(0, 2000)}`,
+          `Upstream error user=${userId ?? 'unknown'} status=${upstream.status} message=${upstreamErrorMessage(errorBody)}`,
         );
         res.send(errorBody);
         return;
@@ -183,7 +210,7 @@ export class CompletionsController {
             if (!upstream.ok) {
               const errorBody = await upstream.text();
               this.logger.warn(
-                `Batch[${index}] upstream error status=${upstream.status} body=${errorBody}`,
+                `Batch[${index}] upstream error status=${upstream.status} message=${upstreamErrorMessage(errorBody)}`,
               );
               return {
                 index,

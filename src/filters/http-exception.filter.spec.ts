@@ -173,3 +173,37 @@ describe('HttpExceptionFilter', () => {
     expect(response.status).toHaveBeenCalledWith(500);
   });
 });
+
+describe('HttpExceptionFilter: a body that is not JSON', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('never logs or returns a fragment of the body', () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const filter = new HttpExceptionFilter(false);
+    const { host, response } = makeHost();
+    const fragment = 'Lives in Porto SENTINEL';
+    const err = Object.assign(
+      new SyntaxError(`Unexpected token 'L', "${fragment}" is not valid JSON`),
+      {
+        type: 'entity.parse.failed',
+        body: fragment,
+        status: 400,
+      },
+    );
+
+    filter.catch(err, host);
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    const everything = JSON.stringify([
+      warnSpy.mock.calls,
+      errorSpy.mock.calls,
+      response.json.mock.calls,
+    ]);
+    expect(everything).not.toContain('SENTINEL');
+    expect(response.json.mock.calls[0][0]).toMatchObject({
+      statusCode: 400,
+      message: 'Request body is not valid JSON',
+    });
+  });
+});
