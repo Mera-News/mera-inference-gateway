@@ -6,6 +6,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  HttpException,
   Inject,
   Logger,
   NotFoundException,
@@ -20,7 +21,7 @@ import type { Response } from 'express';
 import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
-import { InferenceJobsService } from './inference-jobs.service';
+import { DailyReadingExceededError, InferenceJobsService } from './inference-jobs.service';
 import { SubmitJobDto } from './dto/submit-job.dto';
 import { JOB_STORE, type JobStore } from './job-store.port';
 
@@ -28,6 +29,10 @@ import { JOB_STORE, type JobStore } from './job-store.port';
 // key — bounds length and character set so no client string can shape key
 // syntax, independent of the fact that only the hash is ever used as a key.
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+
+/** Longest Retry-After a reading refusal advertises. The app re-checks on its
+ *  own schedule; a value of hours would only park its shared limiter. */
+const READING_RETRY_AFTER_CAP_SECONDS = 60;
 
 @Controller('v1/inference')
 @UseGuards(AuthGuard)
@@ -45,6 +50,8 @@ export class InferenceJobsController {
     @Req() req: AuthenticatedRequest,
     @Body() dto: SubmitJobDto,
     @Headers('idempotency-key') idempotencyKey?: string,
+    @Headers('x-mera-reading') readingClient?: string,
+    @Res({ passthrough: true }) res?: Response,
   ): Promise<{ requestId: string; capabilityToken: string }> {
     // Capability-token authed callers (phase-2 chain from background) must
     // hold the `jobs:submit-followup` scope. The original submit always
@@ -61,7 +68,32 @@ export class InferenceJobsController {
     if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
       throw new BadRequestException('Invalid Idempotency-Key');
     }
-    return this.jobs.submit(req.user.id, dto, idempotencyKey);
+    let result;
+    try {
+      result = await this.jobs.submit(req.user.id, dto, idempotencyKey, {
+        tier: req.user.tier,
+        followup: req.user.capability !== undefined,
+      });
+    } catch (err) {
+      if (!(err instanceof DailyReadingExceededError)) throw err;
+      const body = { code: 'daily-quota-exceeded', resetAt: err.resetAt.toISOString() };
+      // Clients that predate the meter (no X-Mera-Reading header) answer 429
+      // by pausing every gateway call they make, and 401/403/409/5xx each
+      // trigger worse handling. A 402 lands in their plain "submit failed"
+      // branch: one POST, batch retried later, nothing paused.
+      if (readingClient !== '1') throw new HttpException(body, 402);
+      const toReset = Math.ceil((err.resetAt.getTime() - err.nowMs) / 1000);
+      res?.setHeader(
+        'Retry-After',
+        String(Math.max(1, Math.min(READING_RETRY_AFTER_CAP_SECONDS, toReset))),
+      );
+      throw new HttpException(body, 429);
+    }
+    const { readingUsed, ...out } = result;
+    if (readingUsed !== undefined) {
+      res?.setHeader('X-Mera-Reading-Used', String(Math.round(readingUsed * 1000) / 1000));
+    }
+    return out;
   }
 
   @Get('jobs/:requestId/results')

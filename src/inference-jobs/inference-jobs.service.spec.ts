@@ -39,6 +39,9 @@ describe('InferenceJobsService', () => {
       storeMock as never,
       flowMock as never,
       capabilityTokensMock as never,
+      // Meter off: these cases pin job-store and idempotency behaviour; the
+      // meter's own seam is covered in inference-jobs.meter.spec.ts.
+      { charge: jest.fn().mockResolvedValue({ status: 'off' }), refund: jest.fn() } as never,
     );
   });
 
@@ -66,8 +69,8 @@ describe('InferenceJobsService', () => {
         expoPushToken: 'ExponentPushToken[t]',
         e2eeSession: { 'X-Signing-Algo': 'ed' },
         requests: [
-          { id: 'a', body: { x: 1 } },
-          { id: 'b', body: {} },
+          { id: 'a', body: { x: 1, max_tokens: 512 } },
+          { id: 'b', body: { max_tokens: 512 } },
         ],
         sharedSystem: 'CIPHER',
       });
@@ -174,9 +177,9 @@ describe('InferenceJobsService', () => {
     it('throws 409 ConflictException while the key is still reserved, with no flow created', async () => {
       storeMock.reserveIdempotencyKey.mockResolvedValue({ status: 'in-progress' });
 
-      await expect(
-        service.submit('user-1', fullDto as never, idempotencyKey),
-      ).rejects.toThrow(ConflictException);
+      await expect(service.submit('user-1', fullDto as never, idempotencyKey)).rejects.toThrow(
+        ConflictException,
+      );
       expect(storeMock.createJob).not.toHaveBeenCalled();
       expect(flowMock.createInferenceFlow).not.toHaveBeenCalled();
     });
@@ -217,9 +220,9 @@ describe('InferenceJobsService', () => {
       storeMock.reserveIdempotencyKey.mockResolvedValue({ status: 'reserved' });
       storeMock.createJob.mockRejectedValue(new Error('ECONNREFUSED'));
 
-      await expect(
-        service.submit('user-1', fullDto as never, idempotencyKey),
-      ).rejects.toThrow(ServiceUnavailableException);
+      await expect(service.submit('user-1', fullDto as never, idempotencyKey)).rejects.toThrow(
+        ServiceUnavailableException,
+      );
 
       expect(storeMock.releaseIdempotencyKey).toHaveBeenCalledWith('user-1', expectedHash);
       expect(storeMock.finalizeIdempotencyKey).not.toHaveBeenCalled();
@@ -229,9 +232,9 @@ describe('InferenceJobsService', () => {
       storeMock.reserveIdempotencyKey.mockResolvedValue({ status: 'reserved' });
       flowMock.createInferenceFlow.mockRejectedValue(new Error('BULLMQ_DOWN'));
 
-      await expect(
-        service.submit('user-1', fullDto as never, idempotencyKey),
-      ).rejects.toThrow('BULLMQ_DOWN');
+      await expect(service.submit('user-1', fullDto as never, idempotencyKey)).rejects.toThrow(
+        'BULLMQ_DOWN',
+      );
 
       expect(storeMock.releaseIdempotencyKey).toHaveBeenCalledWith('user-1', expectedHash);
       expect(storeMock.finalizeIdempotencyKey).not.toHaveBeenCalled();

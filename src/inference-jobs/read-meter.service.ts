@@ -11,7 +11,7 @@ export type MeterCharge = { key: string; bytes: number };
 export type ChargeResult =
   | { status: 'off' }
   | { status: 'charged'; charge: MeterCharge; used: number; limit: number }
-  | { status: 'refused'; used: number; limit: number; resetAt: Date };
+  | { status: 'refused'; used: number; limit: number; resetAt: Date; nowMs: number };
 
 type MeterRedis = Redis & {
   chargeReadMeter(
@@ -114,7 +114,9 @@ export class ReadMeterService implements OnModuleInit {
     const resetAt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1));
     const key = `${this.prefix}meter:${args.userId}:${day}`;
     const indexKey = `${this.prefix}meter:users:${day}`;
-    const cand = args.mayRaiseLimit ? this.base * TIER_MULTIPLIER[args.tier ?? 'starter'] : this.base;
+    const cand = args.mayRaiseLimit
+      ? this.base * TIER_MULTIPLIER[args.tier ?? 'starter']
+      : this.base;
     const [ok, used, limit] = await r.chargeReadMeter(
       key,
       indexKey,
@@ -126,7 +128,7 @@ export class ReadMeterService implements OnModuleInit {
     );
     return ok === 1
       ? { status: 'charged', charge: { key, bytes: args.cost }, used, limit }
-      : { status: 'refused', used, limit, resetAt };
+      : { status: 'refused', used, limit, resetAt, nowMs };
   }
 
   async refund(charge: MeterCharge): Promise<void> {

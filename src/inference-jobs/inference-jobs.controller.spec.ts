@@ -54,7 +54,10 @@ describe('InferenceJobsController', () => {
       const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
       const out = await controller.submit(req, dto as never);
       expect(out.requestId).toBe(VALID_ID);
-      expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, undefined);
+      expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, undefined, {
+        tier: undefined,
+        followup: false,
+      });
     });
 
     it('rejects a capability token lacking jobs:submit-followup scope', async () => {
@@ -95,18 +98,18 @@ describe('InferenceJobsController', () => {
       it('rejects a malformed key with 400 before the service is touched', async () => {
         const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
 
-        await expect(
-          controller.submit(req, dto as never, 'has a space'),
-        ).rejects.toThrow(BadRequestException);
+        await expect(controller.submit(req, dto as never, 'has a space')).rejects.toThrow(
+          BadRequestException,
+        );
         expect(jobsService.submit).not.toHaveBeenCalled();
       });
 
       it('rejects a key over 128 characters', async () => {
         const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
 
-        await expect(
-          controller.submit(req, dto as never, 'a'.repeat(129)),
-        ).rejects.toThrow(BadRequestException);
+        await expect(controller.submit(req, dto as never, 'a'.repeat(129))).rejects.toThrow(
+          BadRequestException,
+        );
         expect(jobsService.submit).not.toHaveBeenCalled();
       });
 
@@ -117,7 +120,10 @@ describe('InferenceJobsController', () => {
 
         await controller.submit(req, dto as never, key);
 
-        expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, key);
+        expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, key, {
+          tier: undefined,
+          followup: false,
+        });
       });
 
       it('accepts the full allowed character set (alnum, colon, underscore, hyphen)', async () => {
