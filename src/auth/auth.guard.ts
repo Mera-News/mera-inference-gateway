@@ -16,10 +16,14 @@ import {
   CapabilityClaims,
   CapabilityTokenService,
 } from './capability-token.service';
+import { parseTier, type Tier } from './tier';
 
 export interface AuthenticatedUser {
   id: string;
   subscriptionIsActive: boolean;
+  /** JWT `tier` claim when recognised. Undefined for a capability token or a
+   *  missing/unknown claim; the read meter treats undefined as 1x. */
+  tier?: Tier;
   /** Set when this request authed with a capability token instead of a JWT.
    *  Downstream handlers use it to enforce `rid` / scope restrictions. */
   capability?: CapabilityClaims;
@@ -32,6 +36,7 @@ export interface AuthenticatedRequest extends Request {
 interface MeraJwtPayload extends JWTPayload {
   userId?: string;
   subscriptionIsActive?: boolean;
+  tier?: unknown;
 }
 
 @Injectable()
@@ -133,6 +138,7 @@ export class AuthGuard implements CanActivate, OnModuleInit {
       request.user = {
         id,
         subscriptionIsActive: jwtPayload.subscriptionIsActive === true,
+        tier: parseTier(jwtPayload.tier),
       };
 
       return true;

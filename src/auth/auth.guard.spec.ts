@@ -130,6 +130,24 @@ describe('AuthGuard', () => {
       });
     });
 
+    it('attaches a recognised tier claim', async () => {
+      mockJwtVerify.mockResolvedValue({
+        payload: { sub: 'user-7', iss: JWT_ISSUER, tier: 'professional' },
+      });
+      const ctx = makeContext('Bearer good.jwt.token');
+      await guard.canActivate(ctx);
+      expect(getRequest(ctx).user).toMatchObject({ id: 'user-7', tier: 'professional' });
+    });
+
+    it('drops an unknown tier claim (meters as 1x)', async () => {
+      mockJwtVerify.mockResolvedValue({
+        payload: { sub: 'user-8', iss: JWT_ISSUER, tier: 'platinum' },
+      });
+      const ctx = makeContext('Bearer good.jwt.token');
+      await guard.canActivate(ctx);
+      expect((getRequest(ctx).user as { tier?: string }).tier).toBeUndefined();
+    });
+
     it('rejects a validly-signed JWT that carries neither sub nor userId', async () => {
       // A token with no subject cannot identify a principal. Authenticating it
       // as the empty-string user would let an unidentifiable caller act as the
