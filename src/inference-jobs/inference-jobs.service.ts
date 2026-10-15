@@ -127,6 +127,10 @@ export class InferenceJobsService {
 
     // What goes upstream: each body, plus the shared system prompt the worker
     // prepends to every one of them.
+    // ponytail: accepted bypasses. A patched client could send scoring through
+    // the unmetered /v1/chat/completions/batch (the per-route throttle bounds
+    // it); meter /batch once its spend shows in the usage report. A downgrade
+    // keeps the old tier for up to the JWT's 1h lifetime.
     const sharedBytes = sharedSystem ? Buffer.byteLength(sharedSystem) : 0;
     const cost = requests.reduce(
       (sum, r) => sum + Buffer.byteLength(JSON.stringify(r.body)) + sharedBytes,
