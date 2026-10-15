@@ -53,7 +53,7 @@ export class JobStoreModule {
           },
         },
       ],
-      exports: [JOB_STORE],
+      exports: [JOB_STORE, JOB_STORE_REDIS_CLIENT],
     };
   }
 }
