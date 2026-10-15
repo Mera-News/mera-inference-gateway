@@ -10,7 +10,7 @@ jest.mock('ioredis', () => {
   return { __esModule: true, default: Redis, _instances: instances };
 });
 
-import { JobStoreModule } from './job-store.module';
+import { JOB_STORE_REDIS_CLIENT, JobStoreModule } from './job-store.module';
 import { JOB_STORE } from './job-store.port';
 
 describe('JobStoreModule.register', () => {
@@ -28,7 +28,7 @@ describe('JobStoreModule.register', () => {
 
     expect(mod.imports).toBeUndefined();
     expect(mod.global).toBe(true);
-    expect(mod.exports).toEqual([JOB_STORE]);
+    expect(mod.exports).toEqual([JOB_STORE, JOB_STORE_REDIS_CLIENT]);
 
     // Resolve the factories by hand (no Nest container needed).
     const providers = mod.providers as Array<{
