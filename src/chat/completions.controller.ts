@@ -105,15 +105,26 @@ export class CompletionsController {
         return;
       }
 
-      if (!upstream.body) {
-        res.send(await upstream.text());
-        return;
-      }
-
-      // Overrides for streaming compatibility
+      // Overrides for streaming compatibility; Content-Encoding also because
+      // fetch already decoded the body the forwarded header describes.
       res.setHeader('Content-Encoding', 'none');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
+
+      // Not SSE: one JSON document. Buffer it so an empty or cut-off upstream
+      // body becomes a 502 instead of an empty 2xx the client cannot retry.
+      if (!upstream.body || !upstream.headers.get('content-type')?.includes('text/event-stream')) {
+        const body = await upstream.text();
+        if (!body.trim()) {
+          this.logger.error(
+            `Upstream empty body user=${userId ?? 'unknown'} status=${upstream.status}`,
+          );
+          res.status(502).json({ error: 'Upstream returned an empty body' });
+          return;
+        }
+        res.send(body);
+        return;
+      }
 
       const nodeStream = Readable.fromWeb(
         upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0],
@@ -135,6 +146,10 @@ export class CompletionsController {
         );
         if (!res.headersSent) {
           res.status(500).json({ error: 'Proxy stream failed' });
+        } else {
+          // pipe() leaves res open on a source error, so the client hangs.
+          // Destroying aborts the body so the client read rejects.
+          res.destroy();
         }
       });
     } catch (error) {
