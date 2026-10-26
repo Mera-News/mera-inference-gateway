@@ -80,7 +80,7 @@ function makeUpstream(
   const {
     ok = true,
     status = 200,
-    headerMap = {},
+    headerMap = { 'content-type': 'text/event-stream' },
     text = jest.fn<Promise<string>, []>().mockResolvedValue(''),
     json = jest.fn<Promise<unknown>, []>().mockResolvedValue({}),
     body = null,
@@ -90,6 +90,7 @@ function makeUpstream(
     ok,
     status,
     headers: {
+      get: (name: string) => headerMap[name.toLowerCase()] ?? null,
       forEach: (cb: (value: string, name: string) => void) => {
         for (const [name, value] of Object.entries(headerMap)) {
           cb(value, name);
@@ -205,16 +206,11 @@ describe('chatCompletions (streaming)', () => {
     expect(res.send).toHaveBeenCalledWith('full-body');
   });
 
-  it('OK with a body: sets streaming override headers and pipes node stream to res', async () => {
+  it('OK with an SSE body: sets streaming override headers and pipes node stream to res', async () => {
     const fakeNodeStream = { pipe: jest.fn(), on: jest.fn() };
     jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
 
-    const upstream = makeUpstream({
-      ok: true,
-      status: 200,
-      headerMap: {},
-      body: {} as unknown,
-    });
+    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
     chatService.proxyChat.mockResolvedValue(upstream);
 
     const res = makeRes();
@@ -283,7 +279,7 @@ describe('chatCompletions (streaming)', () => {
     expect(res.json).toHaveBeenCalledWith({ error: 'Proxy stream failed' });
   });
 
-  it('stream error with headersSent=true: does not call res.status/json', async () => {
+  it('stream error with headersSent=true: destroys res instead of leaving it open', async () => {
     const fakeNodeStream = { pipe: jest.fn(), on: jest.fn() };
     jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
 
@@ -291,6 +287,8 @@ describe('chatCompletions (streaming)', () => {
     chatService.proxyChat.mockResolvedValue(upstream);
 
     const res = makeRes(true);
+    const destroy = jest.fn();
+    (res as unknown as { destroy: jest.Mock }).destroy = destroy;
     await controller.chatCompletions(makeReq({}), res);
 
     const onCalls = fakeNodeStream.on.mock.calls as [string, (err: Error) => void][];
@@ -304,6 +302,7 @@ describe('chatCompletions (streaming)', () => {
 
     expect(res.status).not.toHaveBeenCalled();
     expect(res.json).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalled();
   });
 
   it('proxyChat throws with headersSent=false: responds 502 JSON', async () => {
