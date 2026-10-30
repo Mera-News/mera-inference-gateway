@@ -341,6 +341,9 @@ cp .env.example .env
 | `INFERENCE_JOBS_RESULT_TTL_SECONDS` | No | `86400` | TTL for the job hash + results (client re-fetch window) |
 | `INFERENCE_JOBS_BODY_TTL_SECONDS` | No | `7200` | TTL for request bodies (only needed while processing) |
 | `INFERENCE_MAX_JOB_BYTES` | No | `5242880` | Submit-time payload byte cap (413 on breach) |
+| `READ_BUDGET_STARTER_BYTES` | No | — | Starter (and unpaid) daily read budget in decimal bytes per UTC day, must be >= 1000000. All three `READ_BUDGET_*_BYTES` unset: read meter off. Any one set: all three required, starter <= individual <= professional, else boot fails |
+| `READ_BUDGET_INDIVIDUAL_BYTES` | No | — | Individual daily read budget in bytes. See `READ_BUDGET_STARTER_BYTES` |
+| `READ_BUDGET_PROFESSIONAL_BYTES` | No | — | Professional daily read budget in bytes. See `READ_BUDGET_STARTER_BYTES` |
 | `LOG_LEVEL` | No | `debug` (dev) / `warn` (prod) | Pino log level |
 | `BULLBOARD_ADMIN_USERNAME` | No | — | Bull Board admin UI username; UI returns 503 if unset |
 | `BULLBOARD_ADMIN_PASSWORD` | No | — | Bull Board admin UI password |

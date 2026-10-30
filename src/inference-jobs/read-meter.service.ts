@@ -1,11 +1,11 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { Tier, TIER_MULTIPLIER } from '../auth/tier';
+import { Tier } from '../auth/tier';
 import { JOB_STORE_REDIS_CLIENT } from './job-store.module';
 
 export const METER_TTL_SECONDS = 172_800;
-export const MIN_READ_BUDGET_BASE_BYTES = 1_000_000;
+export const MIN_READ_BUDGET_BYTES = 1_000_000;
 
 export type MeterCharge = { key: string; bytes: number };
 
@@ -34,13 +34,17 @@ type MeterRedis = Redis & {
  *
  * Fail-open cases, all accepted: volatile-ttl eviction of a meter hash resets
  * that day's count; follow-ups (mayRaiseLimit=false) never raise the stored
- * limit; a missing hash means 1x.
+ * limit; a missing hash means the Starter budget.
+ *
+ * Budgets are static per tier, set in infra via READ_BUDGET_STARTER_BYTES,
+ * READ_BUDGET_INDIVIDUAL_BYTES and READ_BUDGET_PROFESSIONAL_BYTES (decimal
+ * bytes per UTC day). mera-server reads the same three vars.
  */
 @Injectable()
 export class ReadMeterService implements OnModuleInit {
   private readonly logger = new Logger(ReadMeterService.name);
   enabled = false;
-  private base = 0;
+  private budgets = { starter: 0, individual: 0, professional: 0 };
   private prefix = 'inf:';
 
   constructor(
@@ -49,21 +53,37 @@ export class ReadMeterService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    const raw = this.config.get<string>('READ_BUDGET_BASE_BYTES');
-    if (raw === undefined || raw === '') {
-      this.logger.warn('READ_BUDGET_BASE_BYTES is unset: read meter is OFF');
+    const names = {
+      starter: 'READ_BUDGET_STARTER_BYTES',
+      individual: 'READ_BUDGET_INDIVIDUAL_BYTES',
+      professional: 'READ_BUDGET_PROFESSIONAL_BYTES',
+    } as const;
+    const raws = Object.values(names).map((n) => this.config.get<string>(n));
+    if (raws.every((r) => r === undefined || r === '')) {
+      this.logger.warn('READ_BUDGET_*_BYTES are unset: read meter is OFF');
       return;
     }
-    const base = Number(raw);
-    if (!Number.isInteger(base) || base <= 0) {
-      throw new Error(`READ_BUDGET_BASE_BYTES must be a positive integer, got "${raw}"`);
-    }
+    const parse = (name: string): number => {
+      const raw = this.config.get<string>(name);
+      if (raw === undefined || raw === '')
+        throw new Error(`${name} must be set when any read budget is set`);
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0)
+        throw new Error(`${name} must be a positive integer, got "${raw}"`);
+      return n;
+    };
+    const starter = parse(names.starter);
+    const individual = parse(names.individual);
+    const professional = parse(names.professional);
     // The app sends at most 10 calls a job (~0.7 MB metered), so any real job
     // fits a 1 MB day; the job store's own INFERENCE_MAX_JOB_BYTES is far larger.
-    if (base < MIN_READ_BUDGET_BASE_BYTES) {
-      throw new Error(`READ_BUDGET_BASE_BYTES (${base}) must be >= ${MIN_READ_BUDGET_BASE_BYTES}`);
+    if (starter < MIN_READ_BUDGET_BYTES) {
+      throw new Error(`${names.starter} (${starter}) must be >= ${MIN_READ_BUDGET_BYTES}`);
     }
-    this.base = base;
+    if (individual < starter) throw new Error(`${names.individual} must be >= ${names.starter}`);
+    if (professional < individual)
+      throw new Error(`${names.professional} must be >= ${names.individual}`);
+    this.budgets = { starter, individual, professional };
     this.prefix = this.config.get<string>('INFERENCE_JOBS_KEY_PREFIX') ?? 'inf:';
     this.redis.defineCommand('chargeReadMeter', {
       numberOfKeys: 2,
@@ -114,9 +134,8 @@ export class ReadMeterService implements OnModuleInit {
     const resetAt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1));
     const key = `${this.prefix}meter:${args.userId}:${day}`;
     const indexKey = `${this.prefix}meter:users:${day}`;
-    const cand = args.mayRaiseLimit
-      ? this.base * TIER_MULTIPLIER[args.tier ?? 'starter']
-      : this.base;
+    // A capability follow-up offers the smallest plan; the stored limit only rises.
+    const cand = args.mayRaiseLimit ? this.budgetFor(args.tier) : this.budgets.starter;
     const [ok, used, limit] = await r.chargeReadMeter(
       key,
       indexKey,
@@ -129,6 +148,12 @@ export class ReadMeterService implements OnModuleInit {
     return ok === 1
       ? { status: 'charged', charge: { key, bytes: args.cost }, used, limit }
       : { status: 'refused', used, limit, resetAt, nowMs };
+  }
+
+  private budgetFor(tier: Tier | undefined): number {
+    return tier === 'individual' || tier === 'professional'
+      ? this.budgets[tier]
+      : this.budgets.starter;
   }
 
   async refund(charge: MeterCharge): Promise<void> {

@@ -17,6 +17,11 @@ const RedisMock = require('ioredis-mock');
  */
 
 const BASE = 6_000_000;
+const BUDGETS = {
+  READ_BUDGET_STARTER_BYTES: String(BASE),
+  READ_BUDGET_INDIVIDUAL_BYTES: String(BASE * 25),
+  READ_BUDGET_PROFESSIONAL_BYTES: String(BASE * 100),
+};
 const PREFIX = 'inf:';
 const at = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 const NOON = at('2026-10-15T12:00:00Z');
@@ -87,7 +92,7 @@ describe('POST /v1/inference/jobs with the read meter', () => {
   const hash = (uid: string, day = DAY) => redis.hgetall(`${PREFIX}meter:${uid}:${day}`);
 
   function build(
-    env: Record<string, string | undefined> = { READ_BUDGET_BASE_BYTES: String(BASE) },
+    env: Record<string, string | undefined> = BUDGETS,
   ) {
     meter = new ReadMeterService(redis, { get: (k: string) => env[k] } as unknown as ConfigService);
     meter.onModuleInit();
@@ -266,7 +271,7 @@ describe('POST /v1/inference/jobs with the read meter', () => {
     ['starter', 1],
     ['individual', 25],
     ['professional', 100],
-  ])('tier %s reads %ix the base', async (tier, mult) => {
+  ])('tier %s budgets %ix the starter bytes', async (tier, mult) => {
     await submitAs(jwtUser('u1', tier), dto([body(100)]));
     expect(Number((await hash('u1')).limit)).toBe(BASE * mult);
   });
@@ -337,7 +342,7 @@ describe('POST /v1/inference/jobs with the read meter', () => {
     expect(store.createJob).not.toHaveBeenCalled();
   });
 
-  it('meter off (READ_BUDGET_BASE_BYTES unset): no charge, no header, nothing written', async () => {
+  it('meter off (READ_BUDGET_* unset): no charge, no header, nothing written', async () => {
     build({});
     const { res } = await submitAs(jwtUser('u1'), dto([body(BASE * 2)]));
     expect(res.headers['X-Mera-Reading-Used']).toBeUndefined();

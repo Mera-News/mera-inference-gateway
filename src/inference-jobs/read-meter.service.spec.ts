@@ -8,6 +8,11 @@ const RedisMock = require('ioredis-mock');
 
 const MB = 1024 * 1024;
 const BASE = 10 * MB;
+const BUDGETS = {
+  READ_BUDGET_STARTER_BYTES: String(BASE),
+  READ_BUDGET_INDIVIDUAL_BYTES: String(BASE * 25),
+  READ_BUDGET_PROFESSIONAL_BYTES: String(BASE * 100),
+};
 const T = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 const DAY = '20260315';
 const NOON = T('2026-03-15T12:00:00Z');
@@ -23,7 +28,7 @@ describe('ReadMeterService', () => {
 
   const setTime = (sec: number) => jest.spyOn(redis, 'time').mockResolvedValue([sec, '0']);
 
-  const make = (env: Record<string, string | undefined> = { READ_BUDGET_BASE_BYTES: String(BASE) }) => {
+  const make = (env: Record<string, string | undefined> = BUDGETS) => {
     const svc = new ReadMeterService(redis, { get: (k: string) => env[k] } as unknown as ConfigService);
     svc.onModuleInit();
     return svc;
@@ -32,30 +37,43 @@ describe('ReadMeterService', () => {
   const args = (o: Record<string, unknown> = {}) =>
     ({ userId: 'u1', tier: 'starter', cost: 1, mayRaiseLimit: true, ...o }) as any;
 
-  it('is off when base is unset and never touches redis', async () => {
+  it('is off when all three budgets are unset or empty and never touches redis', async () => {
     const svc = make({});
     expect(svc.enabled).toBe(false);
     expect(await svc.charge(args())).toEqual({ status: 'off' });
     expect(await redis.keys('*')).toEqual([]);
-    expect(make({ READ_BUDGET_BASE_BYTES: '' }).enabled).toBe(false);
+    const empty = { READ_BUDGET_STARTER_BYTES: '', READ_BUDGET_INDIVIDUAL_BYTES: '', READ_BUDGET_PROFESSIONAL_BYTES: '' };
+    expect(make(empty).enabled).toBe(false);
   });
 
-  it('throws at boot on a bad base', () => {
-    expect(() => make({ READ_BUDGET_BASE_BYTES: 'abc' })).toThrow();
-    expect(() => make({ READ_BUDGET_BASE_BYTES: '1.5' })).toThrow();
-    expect(() => make({ READ_BUDGET_BASE_BYTES: '999999' })).toThrow(/1000000/);
+  it('throws at boot, naming the var, on a partial or bad config', () => {
+    const { READ_BUDGET_INDIVIDUAL_BYTES: _i, ...noInd } = BUDGETS;
+    expect(() => make(noInd)).toThrow(/READ_BUDGET_INDIVIDUAL_BYTES/);
+    expect(() => make({ ...BUDGETS, READ_BUDGET_PROFESSIONAL_BYTES: '' })).toThrow(/READ_BUDGET_PROFESSIONAL_BYTES/);
+    expect(() => make({ ...BUDGETS, READ_BUDGET_STARTER_BYTES: 'abc' })).toThrow(/READ_BUDGET_STARTER_BYTES/);
+    expect(() => make({ ...BUDGETS, READ_BUDGET_INDIVIDUAL_BYTES: '1.5' })).toThrow(/READ_BUDGET_INDIVIDUAL_BYTES/);
+    expect(() => make({ ...BUDGETS, READ_BUDGET_PROFESSIONAL_BYTES: '-5' })).toThrow(/READ_BUDGET_PROFESSIONAL_BYTES/);
   });
 
-  it('boots on a 2 MB Starter base, below INFERENCE_MAX_JOB_BYTES', () => {
-    expect(make({ READ_BUDGET_BASE_BYTES: '2000000' }).enabled).toBe(true);
+  it('throws when starter is below 1,000,000', () => {
+    expect(() => make({ ...BUDGETS, READ_BUDGET_STARTER_BYTES: '999999' })).toThrow(/READ_BUDGET_STARTER_BYTES.*1000000/);
   });
 
-  it('a 2 MB base refuses Starter past 2 MB and lets Individual through', async () => {
-    const svc = make({ READ_BUDGET_BASE_BYTES: '2000000' });
+  it('throws unless starter <= individual <= professional', () => {
+    const o = { READ_BUDGET_STARTER_BYTES: '2000000', READ_BUDGET_INDIVIDUAL_BYTES: '20000000', READ_BUDGET_PROFESSIONAL_BYTES: '100000000' };
+    expect(() => make({ ...o, READ_BUDGET_INDIVIDUAL_BYTES: '1999999' })).toThrow(/READ_BUDGET_INDIVIDUAL_BYTES/);
+    expect(() => make({ ...o, READ_BUDGET_PROFESSIONAL_BYTES: '19999999' })).toThrow(/READ_BUDGET_PROFESSIONAL_BYTES/);
+  });
+
+  it('boots on 2/20/100 MB budgets and meters each tier against its own', async () => {
+    const svc = make({ READ_BUDGET_STARTER_BYTES: '2000000', READ_BUDGET_INDIVIDUAL_BYTES: '20000000', READ_BUDGET_PROFESSIONAL_BYTES: '100000000' });
+    expect(svc.enabled).toBe(true);
     expect((await svc.charge(args({ cost: 2_100_000 }))).status).toBe('refused');
     const ind: any = await svc.charge(args({ userId: 'u2', tier: 'individual', cost: 2_100_000 }));
     expect(ind.status).toBe('charged');
-    expect(ind.limit).toBe(50_000_000);
+    expect(ind.limit).toBe(20_000_000);
+    const pro: any = await svc.charge(args({ userId: 'u3', tier: 'professional' }));
+    expect(pro.limit).toBe(100_000_000);
   });
 
   it('charges bytes, calls, limit, TTLs and the user index', async () => {
@@ -97,19 +115,19 @@ describe('ReadMeterService', () => {
   });
 
   it.each([
-    [undefined, 1],
-    ['none', 1],
-    ['starter', 1],
-    ['bogus', 1],
-    ['individual', 25],
-    ['professional', 100],
-  ])('tier %s gets %dx', async (tier, mult) => {
+    [undefined, BASE],
+    ['none', BASE],
+    ['starter', BASE],
+    ['bogus', BASE],
+    ['individual', BASE * 25],
+    ['professional', BASE * 100],
+  ])('tier %s gets %d bytes', async (tier, bytes) => {
     const svc = make();
     const r: any = await svc.charge(args({ tier: tier === 'bogus' ? undefined : tier }));
-    expect(r.limit).toBe(BASE * mult);
+    expect(r.limit).toBe(bytes);
   });
 
-  it('follow-ups (mayRaiseLimit=false) use base when missing and never lower a stored 100x', async () => {
+  it('follow-ups (mayRaiseLimit=false) use the starter budget when missing and never lower a stored 100x', async () => {
     const svc = make();
     const missing: any = await svc.charge(args({ userId: 'u2', tier: 'professional', mayRaiseLimit: false }));
     expect(missing.limit).toBe(BASE);
@@ -168,7 +186,7 @@ describe('ReadMeterService', () => {
   });
 
   it('honours INFERENCE_JOBS_KEY_PREFIX', async () => {
-    const svc = make({ READ_BUDGET_BASE_BYTES: String(BASE), INFERENCE_JOBS_KEY_PREFIX: 'inf:stg:' });
+    const svc = make({ ...BUDGETS, INFERENCE_JOBS_KEY_PREFIX: 'inf:stg:' });
     const r: any = await svc.charge(args());
     expect(r.charge.key).toBe('inf:stg:meter:u1:' + DAY);
   });
