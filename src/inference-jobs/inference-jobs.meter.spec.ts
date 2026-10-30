@@ -264,8 +264,8 @@ describe('POST /v1/inference/jobs with the read meter', () => {
     [undefined, 1],
     ['none', 1],
     ['starter', 1],
-    ['individual', 5],
-    ['professional', 20],
+    ['individual', 25],
+    ['professional', 100],
   ])('tier %s reads %ix the base', async (tier, mult) => {
     await submitAs(jwtUser('u1', tier), dto([body(100)]));
     expect(Number((await hash('u1')).limit)).toBe(BASE * mult);
@@ -285,7 +285,7 @@ describe('POST /v1/inference/jobs with the read meter', () => {
     await submitAs(jwtUser('u1', 'professional'), dto([body(100)]));
     await submitAs(capUser('u1'), dto([body(100)]));
     h = await hash('u1');
-    expect(Number(h.limit)).toBe(BASE * 20);
+    expect(Number(h.limit)).toBe(BASE * 100);
     expect(h.calls).toBe('3');
   });
 
@@ -296,7 +296,7 @@ describe('POST /v1/inference/jobs with the read meter', () => {
     await submitAs(jwtUser('u1', 'individual'), dto([body(5000)]));
     const h = await hash('u1');
     expect(h.limitHitAt).toBeUndefined();
-    expect(Number(h.limit)).toBe(BASE * 5);
+    expect(Number(h.limit)).toBe(BASE * 25);
   });
 
   it('an idempotent replay is not charged and carries no reading header', async () => {

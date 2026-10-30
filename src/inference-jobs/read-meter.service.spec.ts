@@ -43,10 +43,19 @@ describe('ReadMeterService', () => {
   it('throws at boot on a bad base', () => {
     expect(() => make({ READ_BUDGET_BASE_BYTES: 'abc' })).toThrow();
     expect(() => make({ READ_BUDGET_BASE_BYTES: '1.5' })).toThrow();
-    expect(() => make({ READ_BUDGET_BASE_BYTES: String(5 * MB - 1) })).toThrow(/INFERENCE_MAX_JOB_BYTES/);
-    expect(() =>
-      make({ READ_BUDGET_BASE_BYTES: String(6 * MB), INFERENCE_MAX_JOB_BYTES: String(7 * MB) }),
-    ).toThrow();
+    expect(() => make({ READ_BUDGET_BASE_BYTES: '999999' })).toThrow(/1000000/);
+  });
+
+  it('boots on a 2 MB Starter base, below INFERENCE_MAX_JOB_BYTES', () => {
+    expect(make({ READ_BUDGET_BASE_BYTES: '2000000' }).enabled).toBe(true);
+  });
+
+  it('a 2 MB base refuses Starter past 2 MB and lets Individual through', async () => {
+    const svc = make({ READ_BUDGET_BASE_BYTES: '2000000' });
+    expect((await svc.charge(args({ cost: 2_100_000 }))).status).toBe('refused');
+    const ind: any = await svc.charge(args({ userId: 'u2', tier: 'individual', cost: 2_100_000 }));
+    expect(ind.status).toBe('charged');
+    expect(ind.limit).toBe(50_000_000);
   });
 
   it('charges bytes, calls, limit, TTLs and the user index', async () => {
@@ -92,21 +101,21 @@ describe('ReadMeterService', () => {
     ['none', 1],
     ['starter', 1],
     ['bogus', 1],
-    ['individual', 5],
-    ['professional', 20],
+    ['individual', 25],
+    ['professional', 100],
   ])('tier %s gets %dx', async (tier, mult) => {
     const svc = make();
     const r: any = await svc.charge(args({ tier: tier === 'bogus' ? undefined : tier }));
     expect(r.limit).toBe(BASE * mult);
   });
 
-  it('follow-ups (mayRaiseLimit=false) use base when missing and never lower a stored 20x', async () => {
+  it('follow-ups (mayRaiseLimit=false) use base when missing and never lower a stored 100x', async () => {
     const svc = make();
     const missing: any = await svc.charge(args({ userId: 'u2', tier: 'professional', mayRaiseLimit: false }));
     expect(missing.limit).toBe(BASE);
     await svc.charge(args({ tier: 'professional' }));
     const again: any = await svc.charge(args({ tier: 'starter', mayRaiseLimit: false }));
-    expect(again.limit).toBe(BASE * 20);
+    expect(again.limit).toBe(BASE * 100);
   });
 
   it('a higher tier raises the limit and clears limitHitAt; a lower tier never lowers it', async () => {
@@ -116,10 +125,10 @@ describe('ReadMeterService', () => {
     expect(await redis.hget(key(), 'limitHitAt')).not.toBeNull();
     const up: any = await svc.charge(args({ tier: 'individual' }));
     expect(up.status).toBe('charged');
-    expect(up.limit).toBe(BASE * 5);
+    expect(up.limit).toBe(BASE * 25);
     expect(await redis.hget(key(), 'limitHitAt')).toBeNull();
     const down: any = await svc.charge(args({ tier: 'starter' }));
-    expect(down.limit).toBe(BASE * 5);
+    expect(down.limit).toBe(BASE * 25);
   });
 
   it('rolls the day key at UTC midnight and reports the next midnight as resetAt', async () => {

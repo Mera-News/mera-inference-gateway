@@ -5,6 +5,7 @@ import { Tier, TIER_MULTIPLIER } from '../auth/tier';
 import { JOB_STORE_REDIS_CLIENT } from './job-store.module';
 
 export const METER_TTL_SECONDS = 172_800;
+export const MIN_READ_BUDGET_BASE_BYTES = 1_000_000;
 
 export type MeterCharge = { key: string; bytes: number };
 
@@ -57,11 +58,10 @@ export class ReadMeterService implements OnModuleInit {
     if (!Number.isInteger(base) || base <= 0) {
       throw new Error(`READ_BUDGET_BASE_BYTES must be a positive integer, got "${raw}"`);
     }
-    const maxJob = Number(this.config.get('INFERENCE_MAX_JOB_BYTES') ?? 5_242_880);
-    if (base < maxJob) {
-      throw new Error(
-        `READ_BUDGET_BASE_BYTES (${base}) must be >= INFERENCE_MAX_JOB_BYTES (${maxJob})`,
-      );
+    // The app sends at most 10 calls a job (~0.7 MB metered), so any real job
+    // fits a 1 MB day; the job store's own INFERENCE_MAX_JOB_BYTES is far larger.
+    if (base < MIN_READ_BUDGET_BASE_BYTES) {
+      throw new Error(`READ_BUDGET_BASE_BYTES (${base}) must be >= ${MIN_READ_BUDGET_BASE_BYTES}`);
     }
     this.base = base;
     this.prefix = this.config.get<string>('INFERENCE_JOBS_KEY_PREFIX') ?? 'inf:';
