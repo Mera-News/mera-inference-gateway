@@ -72,9 +72,7 @@ export class JobPayloadTooLargeError extends Error {
  *   requestId instead of creating a new job.
  */
 export type IdempotencyReservation =
-  | { status: 'reserved' }
-  | { status: 'in-progress' }
-  | { status: 'exists'; requestId: string };
+  { status: 'reserved' } | { status: 'in-progress' } | { status: 'exists'; requestId: string };
 
 export interface JobStore {
   /** Persist a new job and return its requestId (24-hex, ObjectId-shaped). */
