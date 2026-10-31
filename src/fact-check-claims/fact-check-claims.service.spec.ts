@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { SEARCH_UNAVAILABLE_CODE } from '../search-unavailable';
 import {
   FactCheckClaimsService,
-  FetchFn,
   MAX_CLAIM_QUERY_LENGTH,
   MAX_CLAIM_REVIEWS,
   MIN_CLAIM_QUERY_LENGTH,
@@ -54,7 +53,7 @@ function makeService(
   values: Record<string, unknown>,
   fetchMock: jest.Mock = jest.fn(),
 ): { service: FactCheckClaimsService; fetchMock: jest.Mock } {
-  const service = new FactCheckClaimsService(makeConfig(values), fetchMock as unknown as FetchFn);
+  const service = new FactCheckClaimsService(makeConfig(values), fetchMock);
   return { service, fetchMock };
 }
 
@@ -389,7 +388,7 @@ describe('FactCheckClaimsService', () => {
             });
           }),
       );
-      const { service } = makeService(ENABLED, fetchMock as unknown as jest.Mock);
+      const { service } = makeService(ENABLED, fetchMock);
 
       const pending = service.searchClaims('a claim');
       jest.advanceTimersByTime(8_000);

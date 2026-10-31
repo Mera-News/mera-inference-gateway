@@ -12,7 +12,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.x]
+        node-version: [24.x]
 
     # The e2e suite boots the full AppModule, which opens Redis connections
     # (BullMQ + the job store) at startup. Provide redis as a throwaway service
@@ -68,3 +68,7 @@ jobs:
 
     - name: Build
       run: npm run build
+
+    # The built app must die on missing config, not on loading a module.
+    - name: Boot smoke test
+      run: npm run test:boot

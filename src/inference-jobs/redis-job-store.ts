@@ -278,7 +278,12 @@ export class RedisJobStore implements JobStore {
   }
 
   async finalizeIdempotencyKey(userId: string, keyHash: string, requestId: string): Promise<void> {
-    await this.redis.set(this.idemKey(userId, keyHash), requestId, 'EX', this.opts.resultTtlSeconds);
+    await this.redis.set(
+      this.idemKey(userId, keyHash),
+      requestId,
+      'EX',
+      this.opts.resultTtlSeconds,
+    );
   }
 
   async releaseIdempotencyKey(userId: string, keyHash: string): Promise<void> {

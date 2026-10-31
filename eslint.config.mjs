@@ -28,7 +28,9 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'error',
-      '@typescript-eslint/no-unsafe-argument': 'error'
+      '@typescript-eslint/no-unsafe-argument': 'error',
+      // Off: a `cause` would carry fetch errors from requests whose URL holds an API key into what gets logged.
+      'preserve-caught-error': 'off',
     },
   },
   {

@@ -3,7 +3,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JobStoreModule, JOB_STORE_REDIS_CLIENT } from './job-store.module';
 import { METER_TTL_SECONDS, ReadMeterService } from './read-meter.service';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const RedisMock = require('ioredis-mock');
 
 const MB = 1024 * 1024;
@@ -29,7 +28,9 @@ describe('ReadMeterService', () => {
   const setTime = (sec: number) => jest.spyOn(redis, 'time').mockResolvedValue([sec, '0']);
 
   const make = (env: Record<string, string | undefined> = BUDGETS) => {
-    const svc = new ReadMeterService(redis, { get: (k: string) => env[k] } as unknown as ConfigService);
+    const svc = new ReadMeterService(redis, {
+      get: (k: string) => env[k],
+    } as unknown as ConfigService);
     svc.onModuleInit();
     return svc;
   };
@@ -42,31 +43,57 @@ describe('ReadMeterService', () => {
     expect(svc.enabled).toBe(false);
     expect(await svc.charge(args())).toEqual({ status: 'off' });
     expect(await redis.keys('*')).toEqual([]);
-    const empty = { READ_BUDGET_STARTER_BYTES: '', READ_BUDGET_INDIVIDUAL_BYTES: '', READ_BUDGET_PROFESSIONAL_BYTES: '' };
+    const empty = {
+      READ_BUDGET_STARTER_BYTES: '',
+      READ_BUDGET_INDIVIDUAL_BYTES: '',
+      READ_BUDGET_PROFESSIONAL_BYTES: '',
+    };
     expect(make(empty).enabled).toBe(false);
   });
 
   it('throws at boot, naming the var, on a partial or bad config', () => {
     const { READ_BUDGET_INDIVIDUAL_BYTES: _i, ...noInd } = BUDGETS;
     expect(() => make(noInd)).toThrow(/READ_BUDGET_INDIVIDUAL_BYTES/);
-    expect(() => make({ ...BUDGETS, READ_BUDGET_PROFESSIONAL_BYTES: '' })).toThrow(/READ_BUDGET_PROFESSIONAL_BYTES/);
-    expect(() => make({ ...BUDGETS, READ_BUDGET_STARTER_BYTES: 'abc' })).toThrow(/READ_BUDGET_STARTER_BYTES/);
-    expect(() => make({ ...BUDGETS, READ_BUDGET_INDIVIDUAL_BYTES: '1.5' })).toThrow(/READ_BUDGET_INDIVIDUAL_BYTES/);
-    expect(() => make({ ...BUDGETS, READ_BUDGET_PROFESSIONAL_BYTES: '-5' })).toThrow(/READ_BUDGET_PROFESSIONAL_BYTES/);
+    expect(() => make({ ...BUDGETS, READ_BUDGET_PROFESSIONAL_BYTES: '' })).toThrow(
+      /READ_BUDGET_PROFESSIONAL_BYTES/,
+    );
+    expect(() => make({ ...BUDGETS, READ_BUDGET_STARTER_BYTES: 'abc' })).toThrow(
+      /READ_BUDGET_STARTER_BYTES/,
+    );
+    expect(() => make({ ...BUDGETS, READ_BUDGET_INDIVIDUAL_BYTES: '1.5' })).toThrow(
+      /READ_BUDGET_INDIVIDUAL_BYTES/,
+    );
+    expect(() => make({ ...BUDGETS, READ_BUDGET_PROFESSIONAL_BYTES: '-5' })).toThrow(
+      /READ_BUDGET_PROFESSIONAL_BYTES/,
+    );
   });
 
   it('throws when starter is below 1,000,000', () => {
-    expect(() => make({ ...BUDGETS, READ_BUDGET_STARTER_BYTES: '999999' })).toThrow(/READ_BUDGET_STARTER_BYTES.*1000000/);
+    expect(() => make({ ...BUDGETS, READ_BUDGET_STARTER_BYTES: '999999' })).toThrow(
+      /READ_BUDGET_STARTER_BYTES.*1000000/,
+    );
   });
 
   it('throws unless starter <= individual <= professional', () => {
-    const o = { READ_BUDGET_STARTER_BYTES: '2000000', READ_BUDGET_INDIVIDUAL_BYTES: '20000000', READ_BUDGET_PROFESSIONAL_BYTES: '100000000' };
-    expect(() => make({ ...o, READ_BUDGET_INDIVIDUAL_BYTES: '1999999' })).toThrow(/READ_BUDGET_INDIVIDUAL_BYTES/);
-    expect(() => make({ ...o, READ_BUDGET_PROFESSIONAL_BYTES: '19999999' })).toThrow(/READ_BUDGET_PROFESSIONAL_BYTES/);
+    const o = {
+      READ_BUDGET_STARTER_BYTES: '2000000',
+      READ_BUDGET_INDIVIDUAL_BYTES: '20000000',
+      READ_BUDGET_PROFESSIONAL_BYTES: '100000000',
+    };
+    expect(() => make({ ...o, READ_BUDGET_INDIVIDUAL_BYTES: '1999999' })).toThrow(
+      /READ_BUDGET_INDIVIDUAL_BYTES/,
+    );
+    expect(() => make({ ...o, READ_BUDGET_PROFESSIONAL_BYTES: '19999999' })).toThrow(
+      /READ_BUDGET_PROFESSIONAL_BYTES/,
+    );
   });
 
   it('boots on 2/20/100 MB budgets and meters each tier against its own', async () => {
-    const svc = make({ READ_BUDGET_STARTER_BYTES: '2000000', READ_BUDGET_INDIVIDUAL_BYTES: '20000000', READ_BUDGET_PROFESSIONAL_BYTES: '100000000' });
+    const svc = make({
+      READ_BUDGET_STARTER_BYTES: '2000000',
+      READ_BUDGET_INDIVIDUAL_BYTES: '20000000',
+      READ_BUDGET_PROFESSIONAL_BYTES: '100000000',
+    });
     expect(svc.enabled).toBe(true);
     expect((await svc.charge(args({ cost: 2_100_000 }))).status).toBe('refused');
     const ind: any = await svc.charge(args({ userId: 'u2', tier: 'individual', cost: 2_100_000 }));
@@ -129,7 +156,9 @@ describe('ReadMeterService', () => {
 
   it('follow-ups (mayRaiseLimit=false) use the starter budget when missing and never lower a stored 100x', async () => {
     const svc = make();
-    const missing: any = await svc.charge(args({ userId: 'u2', tier: 'professional', mayRaiseLimit: false }));
+    const missing: any = await svc.charge(
+      args({ userId: 'u2', tier: 'professional', mayRaiseLimit: false }),
+    );
     expect(missing.limit).toBe(BASE);
     await svc.charge(args({ tier: 'professional' }));
     const again: any = await svc.charge(args({ tier: 'starter', mayRaiseLimit: false }));
@@ -175,7 +204,7 @@ describe('ReadMeterService', () => {
 
   it('refund swallows a redis error', async () => {
     const svc = make();
-    (redis as any).refundReadMeter = jest.fn().mockRejectedValue(new Error('down'));
+    redis.refundReadMeter = jest.fn().mockRejectedValue(new Error('down'));
     await expect(svc.refund({ key: key(), bytes: 1 })).resolves.toBeUndefined();
   });
 
@@ -196,7 +225,10 @@ describe('ReadMeterService', () => {
     process.env.INFERENCE_JOBS_REDIS_URL = 'redis://x:6379';
     try {
       const mod = await Test.createTestingModule({
-        imports: [ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }), JobStoreModule.register()],
+        imports: [
+          ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+          JobStoreModule.register(),
+        ],
         providers: [ReadMeterService],
       })
         .overrideProvider(JOB_STORE_REDIS_CLIENT)

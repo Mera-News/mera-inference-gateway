@@ -25,7 +25,7 @@ localhost:6379). Full list and traps: `mera-gateway` skill.
 
 Deploys: `main` -> prod, `staging` -> staging (triggers `deploy-news-inference-gateway` and
 `-staging` in `mera-infra/cloud-build.tf`). CI (`.github/workflows/node.js.yml`) runs lint,
-typecheck, unit+cov, e2e and build on pushes to `main`, `staging` and `dev`.
+typecheck, unit+cov, e2e, build and a boot smoke test of `dist` on pushes to `main`, `staging` and `dev`.
 
 ## Load a skill
 

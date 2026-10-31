@@ -2,7 +2,6 @@ import { BadRequestException, Logger, ServiceUnavailableException } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import { SEARCH_UNAVAILABLE_CODE } from '../search-unavailable';
 import {
-  FetchFn,
   MAX_BATCH_QUERIES,
   MAX_QUERY_LENGTH,
   MAX_WEB_SEARCH_RESULTS,
@@ -54,7 +53,7 @@ function makeService(
   values: Record<string, unknown>,
   fetchMock: jest.Mock = jest.fn(),
 ): { service: WebSearchService; fetchMock: jest.Mock } {
-  const service = new WebSearchService(makeConfig(values), fetchMock as unknown as FetchFn);
+  const service = new WebSearchService(makeConfig(values), fetchMock);
   return { service, fetchMock };
 }
 
@@ -331,7 +330,7 @@ describe('WebSearchService', () => {
             });
           }),
       );
-      const { service } = makeService(ENABLED, fetchMock as unknown as jest.Mock);
+      const { service } = makeService(ENABLED, fetchMock);
 
       const pending = service.search('climate');
       jest.advanceTimersByTime(8_000);
@@ -374,7 +373,7 @@ describe('WebSearchService', () => {
         inFlight -= 1;
         return jsonResponse(braveBody(1));
       });
-      const { service } = makeService(ENABLED, fetchMock as unknown as jest.Mock);
+      const { service } = makeService(ENABLED, fetchMock);
 
       await service.searchMany(['aa', 'bb', 'cc']);
 

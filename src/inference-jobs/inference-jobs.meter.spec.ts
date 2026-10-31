@@ -91,9 +91,7 @@ describe('POST /v1/inference/jobs with the read meter', () => {
   const setTime = (sec: number) => jest.spyOn(redis, 'time').mockResolvedValue([String(sec), '0']);
   const hash = (uid: string, day = DAY) => redis.hgetall(`${PREFIX}meter:${uid}:${day}`);
 
-  function build(
-    env: Record<string, string | undefined> = BUDGETS,
-  ) {
+  function build(env: Record<string, string | undefined> = BUDGETS) {
     meter = new ReadMeterService(redis, { get: (k: string) => env[k] } as unknown as ConfigService);
     meter.onModuleInit();
     const service = new InferenceJobsService(

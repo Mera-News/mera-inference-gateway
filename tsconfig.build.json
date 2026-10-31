@@ -1,4 +1,10 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    // Without this TS 6 puts the build info at the repo root, outside the dist that
+    // `nest build` wipes, and the next build sees it as up to date and emits almost nothing.
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
+  },
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
 }

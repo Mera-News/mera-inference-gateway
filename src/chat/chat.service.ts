@@ -88,9 +88,7 @@ export class ChatService {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remainingMs);
 
-    // Bridge the external signal instead of AbortSignal.any: the runtime image
-    // is node:20-alpine and .any needs Node >= 20.3, so the listener bridge is
-    // the always-safe form. Detached in the finally below.
+    // Bridge the external signal with a listener, detached in the finally below.
     const onExternalAbort = () => controller.abort();
     options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
 

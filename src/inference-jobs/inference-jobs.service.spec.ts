@@ -61,7 +61,7 @@ describe('InferenceJobsService', () => {
 
   describe('submit — full dto', () => {
     it('calls store.createJob with the correct input shape', async () => {
-      await service.submit('user-1', fullDto as never);
+      await service.submit('user-1', fullDto);
 
       expect(storeMock.createJob).toHaveBeenCalledTimes(1);
       expect(storeMock.createJob).toHaveBeenCalledWith({
@@ -77,7 +77,7 @@ describe('InferenceJobsService', () => {
     });
 
     it('calls flow.createInferenceFlow with jobId and requestCount', async () => {
-      await service.submit('user-1', fullDto as never);
+      await service.submit('user-1', fullDto);
 
       expect(flowMock.createInferenceFlow).toHaveBeenCalledTimes(1);
       expect(flowMock.createInferenceFlow).toHaveBeenCalledWith({
@@ -87,7 +87,7 @@ describe('InferenceJobsService', () => {
     });
 
     it('calls capabilityTokens.mint with userId and requestId', async () => {
-      await service.submit('user-1', fullDto as never);
+      await service.submit('user-1', fullDto);
 
       expect(capabilityTokensMock.mint).toHaveBeenCalledTimes(1);
       expect(capabilityTokensMock.mint).toHaveBeenCalledWith({
@@ -97,7 +97,7 @@ describe('InferenceJobsService', () => {
     });
 
     it('returns requestId and capabilityToken', async () => {
-      const result = await service.submit('user-1', fullDto as never);
+      const result = await service.submit('user-1', fullDto);
 
       expect(result).toEqual({
         requestId,
@@ -112,7 +112,7 @@ describe('InferenceJobsService', () => {
         requests: [{ id: 'a', body: { x: 1 } }],
       };
 
-      await service.submit('user-1', dtoWithoutOptionals as never);
+      await service.submit('user-1', dtoWithoutOptionals);
 
       const arg = storeMock.createJob.mock.calls[0][0] as Record<string, unknown>;
       expect(arg.expoPushToken).toBeNull();
@@ -126,7 +126,7 @@ describe('InferenceJobsService', () => {
         e2eeSession: { 'X-Signing-Algo': undefined },
       };
 
-      await service.submit('user-1', dto as never);
+      await service.submit('user-1', dto);
 
       const arg = storeMock.createJob.mock.calls[0][0] as Record<string, unknown>;
       expect(arg.e2eeSession).toBeNull();
@@ -161,7 +161,7 @@ describe('InferenceJobsService', () => {
     it('hashes the raw key before reserving and creates a new flow when the slot is free', async () => {
       storeMock.reserveIdempotencyKey.mockResolvedValue({ status: 'reserved' });
 
-      const result = await service.submit('user-1', fullDto as never, idempotencyKey);
+      const result = await service.submit('user-1', fullDto, idempotencyKey);
 
       expect(storeMock.reserveIdempotencyKey).toHaveBeenCalledWith('user-1', expectedHash);
       expect(storeMock.createJob).toHaveBeenCalledTimes(1);
@@ -188,7 +188,7 @@ describe('InferenceJobsService', () => {
       storeMock.reserveIdempotencyKey.mockResolvedValue({ status: 'in-progress' });
 
       try {
-        await service.submit('user-1', fullDto as never, idempotencyKey);
+        await service.submit('user-1', fullDto, idempotencyKey);
         throw new Error('expected submit to throw');
       } catch (err) {
         expect(err).toBeInstanceOf(ConflictException);
@@ -205,7 +205,7 @@ describe('InferenceJobsService', () => {
         requestId: priorRequestId,
       });
 
-      const result = await service.submit('user-1', fullDto as never, idempotencyKey);
+      const result = await service.submit('user-1', fullDto, idempotencyKey);
 
       expect(storeMock.createJob).not.toHaveBeenCalled();
       expect(flowMock.createInferenceFlow).not.toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe('InferenceJobsService', () => {
     });
 
     it('a missing idempotency key behaves exactly like today: no reservation call at all', async () => {
-      await service.submit('user-1', fullDto as never);
+      await service.submit('user-1', fullDto);
 
       expect(storeMock.reserveIdempotencyKey).not.toHaveBeenCalled();
       expect(storeMock.finalizeIdempotencyKey).not.toHaveBeenCalled();

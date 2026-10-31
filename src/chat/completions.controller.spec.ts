@@ -629,7 +629,6 @@ describe('CompletionsController (deadline + client disconnect, real queue)', () 
 });
 
 describe('upstreamErrorMessage', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { upstreamErrorMessage, UPSTREAM_ERROR_LOG_CAP } =
     require('./completions.controller') as typeof import('./completions.controller');
 

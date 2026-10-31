@@ -211,7 +211,7 @@ describe('RedisJobStore', () => {
       await store.appendResult('b'.repeat(24), 0, {
         id: 'r0',
         ok: false,
-        response: undefined as never,
+        response: undefined,
         error: 'boom',
       });
 
@@ -416,12 +416,7 @@ describe('RedisJobStore', () => {
 
         await store.finalizeIdempotencyKey('user-1', 'hash-a', 'req-123');
 
-        expect(redis.set).toHaveBeenCalledWith(
-          'inf:idem:user-1:hash-a',
-          'req-123',
-          'EX',
-          86_400,
-        );
+        expect(redis.set).toHaveBeenCalledWith('inf:idem:user-1:hash-a', 'req-123', 'EX', 86_400);
       });
     });
 

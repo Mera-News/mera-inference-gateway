@@ -52,7 +52,7 @@ describe('InferenceJobsController', () => {
         capabilityToken: 'mc.x.y',
       });
       const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
-      const out = await controller.submit(req, dto as never);
+      const out = await controller.submit(req, dto);
       expect(out.requestId).toBe(VALID_ID);
       expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, undefined, {
         tier: undefined,
@@ -118,7 +118,7 @@ describe('InferenceJobsController', () => {
         const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
         const key = 'run-1:batch-1:rel:0';
 
-        await controller.submit(req, dto as never, key);
+        await controller.submit(req, dto, key);
 
         expect(jobsService.submit).toHaveBeenCalledWith('user-1', dto, key, {
           tier: undefined,

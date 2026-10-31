@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build (all deps + compile)
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm ci
@@ -13,7 +13,7 @@ FROM builder AS deps
 RUN npm prune --omit=dev
 
 # Stage 3: Runtime
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /usr/src/app
 RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001
 COPY --from=builder /usr/src/app/dist ./dist

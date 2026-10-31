@@ -31,7 +31,7 @@ describe('AttestationService', () => {
 
   beforeEach(() => {
     fetchMock = jest.fn();
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
     now = 1_700_000_000_000;
     jest.spyOn(Date, 'now').mockImplementation(() => now);
     jest.spyOn(Logger.prototype, 'debug').mockImplementation();
