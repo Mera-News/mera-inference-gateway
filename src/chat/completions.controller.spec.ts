@@ -1,7 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
-import { Readable } from 'stream';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { ChatService, DeadlineElapsedError } from './chat.service';
 import { CompletionsController } from './completions.controller';
@@ -122,7 +121,9 @@ function makeControllerAndDeps() {
 }
 
 // ---------------------------------------------------------------------------
-// Streaming endpoint
+// Streaming endpoint. SSE relay behaviour (first-chunk read, empty stream,
+// errors, client abort, deadline) is proved on the wire in
+// completions.wire.spec.ts; a mock res cannot show it.
 // ---------------------------------------------------------------------------
 
 describe('chatCompletions (streaming)', () => {
@@ -138,35 +139,6 @@ describe('chatCompletions (streaming)', () => {
   });
 
   afterEach(() => jest.restoreAllMocks());
-
-  it('forwards upstream status and allowed headers, blocks authorization and transfer-encoding', async () => {
-    const upstream = makeUpstream({
-      ok: true,
-      status: 206,
-      headerMap: {
-        'content-type': 'text/event-stream',
-        authorization: 'secret',
-        'transfer-encoding': 'chunked',
-      },
-      body: {} as unknown,
-    });
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue({ pipe: jest.fn(), on: jest.fn() } as any);
-    chatService.proxyChat.mockResolvedValue(upstream);
-
-    const res = makeRes();
-    await controller.chatCompletions(makeReq({}), res);
-
-    expect(res.status).toHaveBeenCalledWith(206);
-
-    // allowed header forwarded
-    expect(res.setHeader).toHaveBeenCalledWith('content-type', 'text/event-stream');
-
-    // blocked headers must NOT be forwarded via the forEach loop
-    const setHeaderCalls = (res.setHeader as jest.Mock).mock.calls as [string, string][];
-    const forwardedNames = setHeaderCalls.map(([name]) => name.toLowerCase());
-    expect(forwardedNames).not.toContain('authorization');
-    expect(forwardedNames).not.toContain('transfer-encoding');
-  });
 
   it('non-OK upstream: logs error, sends error body text, does not set streaming headers', async () => {
     const errorText = jest.fn<Promise<string>, []>().mockResolvedValue('oops');
@@ -206,105 +178,6 @@ describe('chatCompletions (streaming)', () => {
     expect(res.send).toHaveBeenCalledWith('full-body');
   });
 
-  it('OK with an SSE body: sets streaming override headers and pipes node stream to res', async () => {
-    const fakeNodeStream = { pipe: jest.fn(), on: jest.fn() };
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
-
-    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
-    chatService.proxyChat.mockResolvedValue(upstream);
-
-    const res = makeRes();
-    await controller.chatCompletions(makeReq({}), res);
-
-    expect(res.setHeader).toHaveBeenCalledWith('Content-Encoding', 'none');
-    expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-cache');
-    expect(res.setHeader).toHaveBeenCalledWith('Connection', 'keep-alive');
-    expect(fakeNodeStream.pipe).toHaveBeenCalledWith(res);
-    expect(fakeNodeStream.on).toHaveBeenCalledWith('error', expect.any(Function));
-  });
-
-  it('destroys the upstream stream when the client disconnects mid-stream', async () => {
-    // The abort bridge inside ChatService is detached once upstream headers
-    // arrive, so a disconnect AFTER that point can only be propagated here.
-    const fakeNodeStream = { pipe: jest.fn(), on: jest.fn(), destroy: jest.fn() };
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
-
-    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
-    chatService.proxyChat.mockResolvedValue(upstream);
-
-    const res = makeRes();
-    await controller.chatCompletions(makeReq({}), res);
-
-    expect(fakeNodeStream.destroy).not.toHaveBeenCalled();
-
-    // Client walks away: res closes without the response having ended.
-    res.emit('close');
-
-    expect(fakeNodeStream.destroy).toHaveBeenCalled();
-  });
-
-  it('does not destroy the stream when the response finishes normally', async () => {
-    const fakeNodeStream = { pipe: jest.fn(), on: jest.fn(), destroy: jest.fn() };
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
-
-    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
-    chatService.proxyChat.mockResolvedValue(upstream);
-
-    const res = makeRes();
-    await controller.chatCompletions(makeReq({}), res);
-
-    (res as unknown as { writableEnded: boolean }).writableEnded = true;
-    res.emit('close');
-
-    expect(fakeNodeStream.destroy).not.toHaveBeenCalled();
-  });
-
-  it('stream error with headersSent=false: responds 500 JSON', async () => {
-    const fakeNodeStream = { pipe: jest.fn(), on: jest.fn() };
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
-
-    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
-    chatService.proxyChat.mockResolvedValue(upstream);
-
-    const res = makeRes(false);
-    await controller.chatCompletions(makeReq({}), res);
-
-    // extract the error handler registered via .on('error', handler)
-    const onCalls = fakeNodeStream.on.mock.calls as [string, (err: Error) => void][];
-    const [, errorHandler] = onCalls.find(([event]) => event === 'error')!;
-
-    errorHandler(new Error('boom'));
-
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Proxy stream failed' });
-  });
-
-  it('stream error with headersSent=true: destroys res instead of leaving it open', async () => {
-    const fakeNodeStream = { pipe: jest.fn(), on: jest.fn() };
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
-
-    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
-    chatService.proxyChat.mockResolvedValue(upstream);
-
-    const res = makeRes(true);
-    const destroy = jest.fn();
-    (res as unknown as { destroy: jest.Mock }).destroy = destroy;
-    await controller.chatCompletions(makeReq({}), res);
-
-    const onCalls = fakeNodeStream.on.mock.calls as [string, (err: Error) => void][];
-    const [, errorHandler] = onCalls.find(([event]) => event === 'error')!;
-
-    // Clear any prior calls from setup
-    (res.status as jest.Mock).mockClear();
-    (res.json as jest.Mock).mockClear();
-
-    errorHandler(new Error('too late'));
-
-    expect(res.status).not.toHaveBeenCalled();
-    expect(res.json).not.toHaveBeenCalled();
-    expect(destroy).toHaveBeenCalled();
-  });
-
   it('proxyChat throws with headersSent=false: responds 502 JSON', async () => {
     chatService.proxyChat.mockRejectedValue(new Error('network error'));
 
@@ -334,10 +207,12 @@ describe('chatCompletions (streaming)', () => {
   });
 
   it('extractE2EEHeaders: string values forwarded with canonical casing; array values dropped', async () => {
-    const fakeNodeStream = { pipe: jest.fn(), on: jest.fn() };
-    jest.spyOn(Readable, 'fromWeb').mockReturnValue(fakeNodeStream as any);
-
-    const upstream = makeUpstream({ ok: true, status: 200, body: {} as unknown });
+    const upstream = makeUpstream({
+      ok: true,
+      status: 200,
+      headerMap: { 'content-type': 'application/json' },
+      text: jest.fn<Promise<string>, []>().mockResolvedValue('{}'),
+    });
     chatService.proxyChat.mockResolvedValue(upstream);
 
     const req = makeReq(

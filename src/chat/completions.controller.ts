@@ -84,14 +84,9 @@ export class CompletionsController {
         userId,
       });
 
-      res.status(upstream.status);
-
-      // Forward all upstream headers except blocked ones
-      upstream.headers.forEach((value, name) => {
-        if (!BLOCKED_RESPONSE_HEADERS.has(name)) {
-          res.setHeader(name, value);
-        }
-      });
+      // Upstream headers are copied onto `res` only on the paths that relay an
+      // upstream body. A gateway-made error must carry none of them: an E2EE
+      // echo on a 502 could send the app down its decrypt path.
 
       // Non-2xx from upstream: read full body, forward it, and log ONLY the
       // parsed error message, capped. The raw body is never logged: an error
@@ -101,15 +96,10 @@ export class CompletionsController {
         this.logger.error(
           `Upstream error user=${userId ?? 'unknown'} status=${upstream.status} message=${upstreamErrorMessage(errorBody)}`,
         );
-        res.send(errorBody);
+        this.forwardHeaders(res, upstream);
+        res.status(upstream.status).send(errorBody);
         return;
       }
-
-      // Overrides for streaming compatibility; Content-Encoding also because
-      // fetch already decoded the body the forwarded header describes.
-      res.setHeader('Content-Encoding', 'none');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
 
       // Not SSE: one JSON document. Buffer it so an empty or cut-off upstream
       // body becomes a 502 instead of an empty 2xx the client cannot retry.
@@ -122,7 +112,8 @@ export class CompletionsController {
           res.status(502).json({ error: 'Upstream returned an empty body' });
           return;
         }
-        res.send(body);
+        this.forwardStreamingHeaders(res, upstream);
+        res.status(upstream.status).send(body);
         return;
       }
 
@@ -130,28 +121,71 @@ export class CompletionsController {
         upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0],
       );
 
-      // ChatService detaches its abort bridge once the upstream *headers*
-      // arrive, and pipe() does not destroy its source when the destination
-      // dies — so without this, a client that walks away mid-stream would
-      // leave NEAR draining into a socket nobody reads. Destroying the
+      // ChatService detaches its abort bridge and its deadline timer once the
+      // upstream *headers* arrive, and pipe() does not destroy its source when
+      // the destination dies, so both are re-applied here. Destroying the
       // Readable cancels the underlying web stream and drops the connection.
       clientGone.signal.addEventListener('abort', () => nodeStream.destroy(), { once: true });
+      let deadlineHit = false;
+      const deadlineTimer = setTimeout(
+        () => {
+          deadlineHit = true;
+          nodeStream.destroy();
+        },
+        Math.max(0, deadlineAt - Date.now()),
+      );
 
-      nodeStream.pipe(res);
-
-      nodeStream.on('error', (err) => {
+      // Read the first chunk before any header goes out: a stream that ends
+      // with zero bytes must become a 502, not an empty 200 that pipe() would
+      // send and the app would read as a finished, empty reply.
+      const chunks = nodeStream[Symbol.asyncIterator]();
+      let first: IteratorResult<Uint8Array>;
+      try {
+        first = (await chunks.next()) as IteratorResult<Uint8Array>;
+      } catch (err) {
+        if (clientGone.signal.aborted) return;
+        if (deadlineHit) {
+          this.logger.error(
+            `Upstream sent no stream bytes before the deadline user=${userId ?? 'unknown'}`,
+          );
+          res.status(502).json({ error: 'Upstream request failed' });
+          return;
+        }
         this.logger.error(
           `Proxy stream error user=${userId ?? 'unknown'}`,
           err instanceof Error ? err.stack : err,
         );
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Proxy stream failed' });
-        } else {
-          // pipe() leaves res open on a source error, so the client hangs.
-          // Destroying aborts the body so the client read rejects.
-          res.destroy();
-        }
+        res.status(500).json({ error: 'Proxy stream failed' });
+        return;
+      } finally {
+        clearTimeout(deadlineTimer);
+      }
+
+      if (first.done) {
+        if (clientGone.signal.aborted) return;
+        this.logger.error(
+          `Upstream empty stream user=${userId ?? 'unknown'} status=${upstream.status}`,
+        );
+        res.status(502).json({ error: 'Upstream returned an empty body' });
+        return;
+      }
+
+      this.forwardStreamingHeaders(res, upstream);
+      res.status(upstream.status);
+      res.write(first.value);
+
+      const rest = Readable.from({ [Symbol.asyncIterator]: () => chunks });
+      rest.on('error', (err) => {
+        // pipe() leaves res open on a source error, so the client hangs.
+        // Destroying aborts the body so the client read rejects.
+        res.destroy();
+        if (clientGone.signal.aborted) return;
+        this.logger.error(
+          `Proxy stream error user=${userId ?? 'unknown'}`,
+          err instanceof Error ? err.stack : err,
+        );
       });
+      rest.pipe(res);
     } catch (error) {
       this.logger.error(
         `Proxy request failed user=${userId ?? 'unknown'}`,
@@ -305,6 +339,22 @@ export class CompletionsController {
         res.off('close', onResClose);
       },
     };
+  }
+
+  /** Every upstream header except the blocked ones. */
+  private forwardHeaders(res: Response, upstream: globalThis.Response): void {
+    upstream.headers.forEach((value, name) => {
+      if (!BLOCKED_RESPONSE_HEADERS.has(name)) res.setHeader(name, value);
+    });
+  }
+
+  /** Upstream headers plus the overrides a relayed 2xx body needs; Content-Encoding
+   *  too, because fetch already decoded the body the forwarded header describes. */
+  private forwardStreamingHeaders(res: Response, upstream: globalThis.Response): void {
+    this.forwardHeaders(res, upstream);
+    res.setHeader('Content-Encoding', 'none');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
   }
 
   private extractE2EEHeaders(req: AuthenticatedRequest): Record<string, string> {

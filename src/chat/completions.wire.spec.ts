@@ -16,19 +16,52 @@ import { InferenceQueueService } from './inference-queue.service';
  */
 
 type WireResult =
-  | { kind: 'response'; status: number; contentType: string; body: string }
+  | {
+      kind: 'response';
+      status: number;
+      contentType: string;
+      headers: http.IncomingHttpHeaders;
+      body: string;
+    }
   | { kind: 'aborted'; status: number; partial: string };
+
+/** What NEAR sends beside the body: E2EE echoes and its own ids. None of it may
+ *  ride on a gateway-made error, or the app may treat the error as a reply. */
+const UPSTREAM_HEADERS = {
+  'x-signing-algo': 'ecdsa',
+  'x-model-pub-key': 'abcd',
+  'x-encryption-version': '2',
+  'x-request-id': 'near-req-1',
+};
 
 const enc = new TextEncoder();
 
 function upstreamResponse(
   contentType: string,
   pull: (c: ReadableStreamDefaultController<Uint8Array>) => void | Promise<void>,
+  cancel?: () => void,
 ): Response {
-  return new Response(new ReadableStream<Uint8Array>({ pull }), {
+  return new Response(new ReadableStream<Uint8Array>({ pull, cancel }), {
     status: 200,
-    headers: { 'content-type': contentType },
+    headers: { 'content-type': contentType, ...UPSTREAM_HEADERS },
   });
+}
+
+/** An upstream that sent headers and then nothing, recording when it is cancelled. */
+function silentUpstream(): { response: Response; cancelled: Promise<void> } {
+  let onCancel!: () => void;
+  const cancelled = new Promise<void>((r) => (onCancel = r));
+  const response = upstreamResponse(
+    'text/event-stream',
+    () => new Promise<void>(() => {}),
+    () => onCancel(),
+  );
+  return { response, cancelled };
+}
+
+function expectNoUpstreamHeaders(res: WireResult) {
+  const { headers } = res as { headers: http.IncomingHttpHeaders };
+  for (const name of Object.keys(UPSTREAM_HEADERS)) expect(headers).not.toHaveProperty(name);
 }
 
 /** POST with raw http so a truncated body shows as an abort, not a parse error. */
@@ -55,6 +88,7 @@ function post(port: number): Promise<WireResult> {
             kind: 'response',
             status: res.statusCode!,
             contentType: String(res.headers['content-type'] ?? ''),
+            headers: res.headers,
             body,
           });
         });
@@ -161,5 +195,85 @@ describe('chatCompletions on the wire (fake NEAR at fetch)', () => {
     const res = await post(port);
 
     expect(res).toMatchObject({ kind: 'response', status: 500 });
+    expect((res as { contentType: string }).contentType).toContain('application/json');
+    expectNoUpstreamHeaders(res);
+  });
+
+  it('upstream SSE ends with zero bytes: the client gets a 502 JSON with no upstream headers', async () => {
+    fetchSpy.mockResolvedValue(upstreamResponse('text/event-stream', (c) => c.close()));
+
+    const res = await post(port);
+
+    expect(res).toMatchObject({ kind: 'response', status: 502 });
+    expect((res as { contentType: string }).contentType).toContain('application/json');
+    expect(JSON.parse((res as { body: string }).body)).toEqual({
+      error: 'Upstream returned an empty body',
+    });
+    expectNoUpstreamHeaders(res);
+  });
+
+  it('a normal SSE stream passes byte-identical, with upstream headers and no blocked ones', async () => {
+    const frames = [
+      'data: {"choices":[{"delta":{"content":"a"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"b"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    let i = 0;
+    fetchSpy.mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull: (c) => (i < frames.length ? c.enqueue(enc.encode(frames[i++])) : c.close()),
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'text/event-stream',
+            authorization: 'Bearer leaked',
+            ...UPSTREAM_HEADERS,
+          },
+        },
+      ),
+    );
+
+    const res = await post(port);
+
+    expect(res).toMatchObject({ kind: 'response', status: 200, body: frames.join('') });
+    const { headers } = res as { headers: http.IncomingHttpHeaders };
+    expect(headers['content-type']).toBe('text/event-stream');
+    expect(headers['x-model-pub-key']).toBe('abcd');
+    expect(headers).not.toHaveProperty('authorization');
+  });
+
+  it('a client that leaves before the first chunk cancels upstream and logs no error', async () => {
+    const { response, cancelled } = silentUpstream();
+    fetchSpy.mockResolvedValue(response);
+
+    const req = http.request({
+      port,
+      method: 'POST',
+      path: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+    });
+    req.on('error', () => {});
+    req.end(JSON.stringify({ model: 'm', stream: true, messages: [] }));
+    await new Promise((r) => setTimeout(r, 100)); // let the gateway reach the first-chunk wait
+    req.destroy();
+
+    await cancelled;
+    await new Promise((r) => setTimeout(r, 20)); // let the controller settle
+    expect(Logger.prototype.error).not.toHaveBeenCalled();
+  });
+
+  it('the first-chunk wait ends at the request deadline: 502 with no upstream headers', async () => {
+    jest.spyOn(ChatService.prototype, 'createDeadline').mockImplementation(() => Date.now() + 150);
+    const { response, cancelled } = silentUpstream();
+    fetchSpy.mockResolvedValue(response);
+
+    const res = await post(port);
+
+    await cancelled;
+    expect(res).toMatchObject({ kind: 'response', status: 502 });
+    expect((res as { contentType: string }).contentType).toContain('application/json');
+    expectNoUpstreamHeaders(res);
   });
 });
