@@ -3,8 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { ChatService, DeadlineElapsedError } from './chat.service';
+import { ChatTurnService } from './chat-turn.service';
 import { CompletionsController } from './completions.controller';
 import { InferenceQueueService } from './inference-queue.service';
+
+const TURNS_OFF = { enabled: false } as unknown as ChatTurnService;
 
 /** Minimal EventEmitter-ish recorder so tests can fire 'close' by hand. */
 function makeEmitter() {
@@ -116,6 +119,7 @@ function makeControllerAndDeps() {
   const controller = new CompletionsController(
     chatService as unknown as ChatService,
     queue as unknown as InferenceQueueService,
+    TURNS_OFF,
   );
   return { chatService, queue, controller };
 }
@@ -270,6 +274,7 @@ describe('CompletionsController (batch)', () => {
     controller = new CompletionsController(
       chatService as unknown as ChatService,
       queue as unknown as InferenceQueueService,
+      TURNS_OFF,
     );
   });
 
@@ -488,7 +493,7 @@ describe('CompletionsController (deadline + client disconnect, real queue)', () 
     queue = new InferenceQueueService(
       makeQueueConfig({ INFERENCE_MAX_CONCURRENCY: 1, INFERENCE_MAX_QUEUE_DEPTH: 200 }),
     );
-    controller = new CompletionsController(chatService as unknown as ChatService, queue);
+    controller = new CompletionsController(chatService as unknown as ChatService, queue, TURNS_OFF);
   });
 
   afterEach(() => jest.restoreAllMocks());

@@ -4,7 +4,9 @@ import { Test } from '@nestjs/testing';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { AuthGuard } from '../auth/auth.guard';
+import { JOB_STORE } from '../inference-jobs/job-store.port';
 import { ChatService } from './chat.service';
+import { ChatTurnService } from './chat-turn.service';
 import { CompletionsController } from './completions.controller';
 import { InferenceQueueService } from './inference-queue.service';
 
@@ -114,7 +116,12 @@ describe('chatCompletions on the wire (fake NEAR at fetch)', () => {
         }),
       ],
       controllers: [CompletionsController],
-      providers: [ChatService, InferenceQueueService],
+      providers: [
+        ChatService,
+        ChatTurnService,
+        InferenceQueueService,
+        { provide: JOB_STORE, useValue: {} },
+      ],
     })
       .overrideGuard(AuthGuard)
       .useValue({ canActivate: () => true })

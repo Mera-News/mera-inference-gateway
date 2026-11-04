@@ -1,9 +1,21 @@
-import { Controller, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { ChatService, DeadlineElapsedError } from './chat.service';
+import { ChatTurnService, TURN_ID_PATTERN, type TurnRelay } from './chat-turn.service';
 import { InferenceQueueService } from './inference-queue.service';
 
 /** E2EE request headers forwarded upstream (lowercase → canonical). NEAR AI
@@ -64,11 +76,32 @@ export class CompletionsController {
   constructor(
     private readonly chatService: ChatService,
     private readonly queue: InferenceQueueService,
+    private readonly turns: ChatTurnService,
   ) {}
 
   @Post('chat/completions')
   async chatCompletions(@Req() req: AuthenticatedRequest, @Res() res: Response) {
     const userId = req.user?.id;
+
+    // An old app sends no header, and with the flag off it is ignored. A
+    // capability token cannot read a turn back, so it gets no detached turn.
+    const turnId = req.headers['x-mera-turn-id'];
+    if (this.turns.enabled && typeof turnId === 'string' && !req.user?.capability) {
+      if (!TURN_ID_PATTERN.test(turnId)) {
+        res.status(400).json({ error: 'Invalid X-Mera-Turn-Id' });
+        return;
+      }
+      if (await this.turns.claim(turnId, userId)) {
+        const clientGone = this.clientAbortSignal(req, res);
+        await this.turns.run(
+          { id: turnId, userId, body: req.body, e2eeHeaders: this.extractE2EEHeaders(req) },
+          this.turnRelay(res, clientGone.signal, userId),
+          clientGone.signal,
+        );
+        return;
+      }
+    }
+
     // Deadline stamped at request entry — see batch route for why.
     const deadlineAt = this.chatService.createDeadline();
     // Deliberately not disposed here: this handler returns while the response
@@ -197,6 +230,83 @@ export class CompletionsController {
     }
   }
 
+  /**
+   * Replays a detached chat turn, as raw bytes from offset `after` (default 0).
+   *
+   * - 200 `application/octet-stream`; the body is the stored bytes from `after`,
+   *   possibly empty. Resume with `after + bytes received`.
+   *   `X-Mera-Turn-Status`: `running` (poll again), `done` (the body reaches the
+   *   end of the reply), `error` (no complete reply is coming, send the leg
+   *   again), `cancelled`.
+   *   `X-Mera-Turn-Total`: bytes stored so far.
+   *   `X-Mera-Turn-Upstream-Status`: on a final status, if upstream answered. On
+   *   a non-2xx it is the only trace of the answer: error bodies are not stored.
+   * - 404 `{code:'turn-gone'}`: unknown, expired, evicted or someone else's, all
+   *   identical. Also the answer with the feature off.
+   * - 503 `{code:'turn-store-unavailable'}`: could not look. Try again.
+   * - 400: `after` is not a byte offset.
+   *
+   * A final status is read before the bytes, so the body of a `done` is complete.
+   * Same `AuthGuard` and default throttle as the chat route, and no read meter.
+   * A capability token gets the 404: it is bound to one job, never a turn.
+   */
+  @Get('chat/turns/:id')
+  async getTurn(
+    @Param('id') id: string,
+    @Query('after') after: string | undefined,
+    @Req() req: AuthenticatedRequest,
+    @Res() res: Response,
+  ) {
+    if (after !== undefined && !/^\d{1,15}$/.test(after)) {
+      res.status(400).json({ error: 'Invalid after' });
+      return;
+    }
+    if (!this.turnRouteOpen(id, req)) {
+      res.status(404).json({ code: 'turn-gone' });
+      return;
+    }
+    try {
+      const turn = await this.turns.read(id, req.user.id, Number(after ?? 0));
+      if (!turn) {
+        res.status(404).json({ code: 'turn-gone' });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('X-Mera-Turn-Status', turn.status);
+      res.setHeader('X-Mera-Turn-Total', String(turn.total));
+      if (turn.upstreamStatus !== null) {
+        res.setHeader('X-Mera-Turn-Upstream-Status', String(turn.upstreamStatus));
+      }
+      res.status(200).send(turn.bytes);
+    } catch (error) {
+      this.turnStoreFailed(res, error);
+    }
+  }
+
+  /**
+   * Stops a detached turn: 204, also when it had already ended, or 404
+   * `{code:'turn-gone'}` / 503 as for GET. The stored bytes stay until the TTL.
+   * Works across instances: the one running the turn polls the flag.
+   */
+  @Delete('chat/turns/:id')
+  async deleteTurn(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+    @Res() res: Response,
+  ) {
+    if (!this.turnRouteOpen(id, req)) {
+      res.status(404).json({ code: 'turn-gone' });
+      return;
+    }
+    try {
+      if (await this.turns.cancel(id, req.user.id)) res.status(204).end();
+      else res.status(404).json({ code: 'turn-gone' });
+    } catch (error) {
+      this.turnStoreFailed(res, error);
+    }
+  }
+
   @Post('chat/completions/batch')
   async batchChatCompletions(@Req() req: AuthenticatedRequest, @Res() res: Response) {
     const userId = req.user?.id;
@@ -300,6 +410,55 @@ export class CompletionsController {
       `Batch complete user=${userId ?? 'unknown'} total=${results.length} errors=${results.filter((r) => 'error' in r).length}`,
     );
     res.json({ results });
+  }
+
+  private turnRouteOpen(id: string, req: AuthenticatedRequest): boolean {
+    return this.turns.enabled && TURN_ID_PATTERN.test(id) && !req.user.capability;
+  }
+
+  private turnStoreFailed(res: Response, error: unknown): void {
+    this.logger.error('Turn store failed', error instanceof Error ? error.stack : error);
+    res.status(503).json({ code: 'turn-store-unavailable' });
+  }
+
+  /** The chat route's answers, for a turn. Once the client left, each is a no-op. */
+  private turnRelay(res: Response, clientGone: AbortSignal, userId: string): TurnRelay {
+    let started = false;
+    return {
+      fail: (status, error) => {
+        if (!clientGone.aborted) res.status(status).json({ error });
+      },
+      upstreamError: (upstream, body) => {
+        this.logger.error(
+          `Upstream error user=${userId} status=${upstream.status} message=${upstreamErrorMessage(body)}`,
+        );
+        if (clientGone.aborted) return;
+        this.forwardHeaders(res, upstream);
+        res.status(upstream.status).send(body);
+      },
+      write: (upstream, chunk) => {
+        if (clientGone.aborted) return;
+        if (!started) {
+          started = true;
+          this.forwardStreamingHeaders(res, upstream);
+          res.status(upstream.status);
+        }
+        // shortcut: no backpressure, a slow client buffers up to one reply in
+        // memory; upgrade if detached turns ever show in instance memory.
+        res.write(chunk);
+      },
+      end: () => {
+        if (!clientGone.aborted) res.end();
+      },
+      send: (upstream, body) => {
+        if (clientGone.aborted) return;
+        this.forwardStreamingHeaders(res, upstream);
+        res.status(upstream.status).send(body);
+      },
+      abort: () => {
+        res.destroy();
+      },
+    };
   }
 
   /**
