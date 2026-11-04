@@ -51,6 +51,27 @@ export interface ResultsView {
   results: JobResult[];
 }
 
+/** A detached chat turn. `running` is the only state that ever changes. */
+export type TurnStatus = 'running' | 'done' | 'error' | 'cancelled';
+
+export interface TurnMeta {
+  userId: string;
+  status: TurnStatus;
+}
+
+export interface TurnRead extends TurnMeta {
+  /** Upstream's HTTP status once it answered; null before that. */
+  upstreamStatus: number | null;
+  /** Epoch ms of the last write, so a dead writer can be told from a slow one. */
+  updatedAt: number;
+  /** Stored ciphertext from the requested offset on. */
+  bytes: Buffer;
+  /** Length of the stored ciphertext. */
+  total: number;
+  /** Length the writer recorded; above `total` means the bytes were evicted. */
+  recordedBytes: number;
+}
+
 /** Thrown by adapters that enforce a submit-time payload byte cap. */
 export class JobPayloadTooLargeError extends Error {
   constructor(
@@ -111,6 +132,22 @@ export interface JobStore {
    *  retry under the same key isn't blocked for the rest of the reservation
    *  TTL. */
   releaseIdempotencyKey(userId: string, keyHash: string): Promise<void>;
+
+  /** Claim `turnId` for `userId` as running. False when the id is already taken. */
+  beginTurn(turnId: string, userId: string): Promise<boolean>;
+
+  /** Append raw ciphertext. Rejects when the turn or its stored bytes are gone,
+   *  because a later offset would then point at the wrong byte. */
+  appendTurn(turnId: string, bytes: Buffer): Promise<void>;
+
+  /** Move a running turn to a final status. A final status never changes. */
+  finishTurn(turnId: string, status: TurnStatus, upstreamStatus?: number): Promise<void>;
+
+  /** Owner + status. Null if unknown/expired. */
+  getTurnMeta(turnId: string): Promise<TurnMeta | null>;
+
+  /** Owner + status + ciphertext from byte `after`. Null if unknown/expired. */
+  readTurn(turnId: string, after: number): Promise<TurnRead | null>;
 
   /** Liveness probe of the backing store; rejects when unreachable. */
   ping(): Promise<void>;

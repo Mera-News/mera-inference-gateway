@@ -10,6 +10,9 @@ import {
   JobStore,
   RequestContext,
   ResultsView,
+  TurnMeta,
+  TurnRead,
+  TurnStatus,
 } from './job-store.port';
 
 /** Fixed, not configurable via env — matches the approved bgsubmit design:
@@ -43,6 +46,11 @@ export interface RedisJobStoreOptions {
  *                                    finalized requestId (24h TTL, same as
  *                                    the job hash) — see reserve/finalize/
  *                                    releaseIdempotencyKey below.
+ *
+ * Key layout per chat turn (client-minted id, validated by the controller):
+ *   {prefix}turn:{id}         HASH   userId, status, updatedAt, bytes,
+ *                                    upstreamStatus
+ *   {prefix}turn:{id}:sse     STRING raw upstream ciphertext, appended
  *
  * All request-path reads are exact-key point lookups — no SCAN, and the
  * prefix is applied server-side only, never derived from client input.
@@ -112,6 +120,47 @@ export class RedisJobStore implements JobStore {
         end
         redis.call('HSET', KEYS[1], 'status', 'completed', 'completedAt', ARGV[1])
         return {tostring(requestCount), redis.call('HLEN', KEYS[2])}
+      `,
+    });
+
+    // Claim, not upsert: a client-minted id must never let one account write
+    // into, or read, another account's turn.
+    this.redis.defineCommand('beginTurn', {
+      numberOfKeys: 1,
+      lua: `
+        if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+        redis.call('HSET', KEYS[1], 'userId', ARGV[1], 'status', 'running',
+          'updatedAt', ARGV[2], 'bytes', '0')
+        redis.call('EXPIRE', KEYS[1], ARGV[3])
+        return 1
+      `,
+    });
+
+    // Refuses when the hash or the bytes were evicted: re-creating either
+    // would leave an ownerless key without a TTL, or restart the stream at
+    // offset 0 under a cursor that has moved on.
+    this.redis.defineCommand('appendTurn', {
+      numberOfKeys: 2,
+      lua: `
+        local recorded = redis.call('HGET', KEYS[1], 'bytes')
+        if not recorded then return -1 end
+        if redis.call('STRLEN', KEYS[2]) ~= tonumber(recorded) then return -1 end
+        local total = redis.call('APPEND', KEYS[2], ARGV[1])
+        redis.call('EXPIRE', KEYS[2], ARGV[3])
+        redis.call('HSET', KEYS[1], 'updatedAt', ARGV[2], 'bytes', total)
+        return total
+      `,
+    });
+
+    this.redis.defineCommand('finishTurn', {
+      numberOfKeys: 2,
+      lua: `
+        if redis.call('HGET', KEYS[1], 'status') ~= 'running' then return 0 end
+        redis.call('HSET', KEYS[1], 'status', ARGV[1], 'updatedAt', ARGV[2])
+        if ARGV[3] ~= '' then redis.call('HSET', KEYS[1], 'upstreamStatus', ARGV[3]) end
+        redis.call('EXPIRE', KEYS[1], ARGV[4])
+        redis.call('EXPIRE', KEYS[2], ARGV[4])
+        return 1
       `,
     });
   }
@@ -290,6 +339,74 @@ export class RedisJobStore implements JobStore {
     await this.redis.del(this.idemKey(userId, keyHash));
   }
 
+  private turnKey(id: string): string {
+    return `${this.opts.keyPrefix}turn:${id}`;
+  }
+
+  async beginTurn(turnId: string, userId: string): Promise<boolean> {
+    const claimed = await this.redis.beginTurn(
+      this.turnKey(turnId),
+      userId,
+      String(Date.now()),
+      String(this.opts.resultTtlSeconds),
+    );
+    return claimed === 1;
+  }
+
+  async appendTurn(turnId: string, bytes: Buffer): Promise<void> {
+    const key = this.turnKey(turnId);
+    const total = await this.redis.appendTurn(
+      key,
+      `${key}:sse`,
+      bytes,
+      String(Date.now()),
+      String(this.opts.resultTtlSeconds),
+    );
+    if (total === -1) throw new Error('turn is gone from the store');
+  }
+
+  async finishTurn(turnId: string, status: TurnStatus, upstreamStatus?: number): Promise<void> {
+    const key = this.turnKey(turnId);
+    await this.redis.finishTurn(
+      key,
+      `${key}:sse`,
+      status,
+      String(Date.now()),
+      upstreamStatus === undefined ? '' : String(upstreamStatus),
+      String(this.opts.resultTtlSeconds),
+    );
+  }
+
+  async getTurnMeta(turnId: string): Promise<TurnMeta | null> {
+    const [userId, status] = await this.redis.hmget(this.turnKey(turnId), 'userId', 'status');
+    if (!userId || !status) return null;
+    return { userId, status: status as TurnStatus };
+  }
+
+  async readTurn(turnId: string, after: number): Promise<TurnRead | null> {
+    const key = this.turnKey(turnId);
+    const pipeline = this.redis.pipeline();
+    pipeline.hmget(key, 'userId', 'status', 'updatedAt', 'bytes', 'upstreamStatus');
+    pipeline.strlen(`${key}:sse`);
+    const [fields, total] = assertPipelineOk(await pipeline.exec()) as [(string | null)[], number];
+
+    const [userId, status, updatedAt, recordedBytes, upstreamStatus] = fields;
+    if (!userId || !status) return null;
+    return {
+      userId,
+      status: status as TurnStatus,
+      upstreamStatus: upstreamStatus ? Number(upstreamStatus) : null,
+      updatedAt: Number(updatedAt),
+      // After the hash: the last bytes land before status leaves `running`, so
+      // a final status read above guarantees this range is complete. Most
+      // polls have nothing new and skip this read.
+      bytes:
+        after < total ? await this.redis.getrangeBuffer(`${key}:sse`, after, -1) : Buffer.alloc(0),
+      total,
+      recordedBytes: Number(recordedBytes),
+    };
+  }
+
   async ping(): Promise<void> {
     await this.redis.ping();
   }
@@ -322,5 +439,21 @@ declare module 'ioredis' {
       completedAt: string,
       resultTtlSeconds: string,
     ): Promise<[string, number] | null>;
+    beginTurn(key: string, userId: string, now: string, ttlSeconds: string): Promise<number>;
+    appendTurn(
+      key: string,
+      bytesKey: string,
+      bytes: Buffer,
+      now: string,
+      ttlSeconds: string,
+    ): Promise<number>;
+    finishTurn(
+      key: string,
+      bytesKey: string,
+      status: string,
+      now: string,
+      upstreamStatus: string,
+      ttlSeconds: string,
+    ): Promise<number>;
   }
 }
