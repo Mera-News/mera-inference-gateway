@@ -118,6 +118,22 @@ describe('LlmInferenceProcessor', () => {
   // 3. UPSTREAM NOT OK (non-2xx response)
   // -------------------------------------------------------------------------
 
+  it('never logs a raw upstream error body, only the parsed message', async () => {
+    const echoed = JSON.stringify({ error: { message: 'bad model' }, echo: 'the reader asked X' });
+    const upstream = makeResponse({ ok: false, status: 400, textValue: echoed });
+    chatMock.proxyChat.mockResolvedValue(upstream);
+    const processor = new LlmInferenceProcessor(
+      chatMock as never,
+      makeStoreMock(makeContext()) as never,
+    );
+
+    await processor.process(makeJob(randomBytes(12).toString('hex'), 0) as never);
+
+    const logged = (Logger.prototype.warn as jest.Mock).mock.calls.flat().join(' ');
+    expect(logged).toContain('bad model');
+    expect(logged).not.toContain('the reader asked X');
+  });
+
   it('appends ok:false result and returns ok:false when upstream is not ok', async () => {
     const upstream = makeResponse({ ok: false, status: 500, textValue: 'err body' });
     chatMock.proxyChat.mockResolvedValue(upstream);

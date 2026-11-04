@@ -2,6 +2,7 @@ import { Inject, Logger } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { ChatService } from '../chat/chat.service';
+import { upstreamErrorMessage } from '../chat/completions.controller';
 import { JOB_STORE, type JobResult, type JobStore } from '../inference-jobs/job-store.port';
 import { LLM_INFERENCE_QUEUE } from './queues.constants';
 
@@ -54,7 +55,7 @@ export class LlmInferenceProcessor extends WorkerHost {
       if (!upstream.ok) {
         const body = await upstream.text();
         this.logger.warn(
-          `jobId=${jobId} requestIndex=${requestIndex} id=${request.id} upstream ${upstream.status} body=${body.slice(0, 500)}`,
+          `jobId=${jobId} requestIndex=${requestIndex} id=${request.id} upstream ${upstream.status} message=${upstreamErrorMessage(body)}`,
         );
         result = {
           id: request.id,
