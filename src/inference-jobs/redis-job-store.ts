@@ -25,6 +25,10 @@ export interface RedisJobStoreOptions {
   keyPrefix: string;
   /** TTL for the job hash + results hash — the client re-fetch window. */
   resultTtlSeconds: number;
+  /** TTL for a chat turn's bytes and hash. The decrypt key dies with the app's
+   *  JS context, so older bytes are waste. Below `bodyTtlSeconds`, so on a
+   *  `volatile-ttl` instance turns are evicted before live job bodies. */
+  turnTtlSeconds: number;
   /** TTL for request bodies — only needed while workers are processing. */
   bodyTtlSeconds: number;
   /** Submit-time cap on the serialized job payload. */
@@ -348,7 +352,7 @@ export class RedisJobStore implements JobStore {
       this.turnKey(turnId),
       userId,
       String(Date.now()),
-      String(this.opts.resultTtlSeconds),
+      String(this.opts.turnTtlSeconds),
     );
     return claimed === 1;
   }
@@ -360,7 +364,7 @@ export class RedisJobStore implements JobStore {
       `${key}:sse`,
       bytes,
       String(Date.now()),
-      String(this.opts.resultTtlSeconds),
+      String(this.opts.turnTtlSeconds),
     );
     if (total === -1) throw new Error('turn is gone from the store');
   }
@@ -373,7 +377,7 @@ export class RedisJobStore implements JobStore {
       status,
       String(Date.now()),
       upstreamStatus === undefined ? '' : String(upstreamStatus),
-      String(this.opts.resultTtlSeconds),
+      String(this.opts.turnTtlSeconds),
     );
   }
 

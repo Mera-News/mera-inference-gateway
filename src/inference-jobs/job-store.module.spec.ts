@@ -44,6 +44,28 @@ describe('JobStoreModule.register', () => {
     expect(store.constructor.name).toBe('RedisJobStore');
   });
 
+  it.each([
+    [undefined, 3_600],
+    ['900', 900],
+    ['nope', 3_600],
+    ['0', 3_600],
+  ])('CHAT_TURN_TTL_SECONDS=%s gives turns a TTL of %i', (value, expected) => {
+    process.env.INFERENCE_JOBS_REDIS_URL = 'redis://job-store:6379';
+    if (value === undefined) delete process.env.CHAT_TURN_TTL_SECONDS;
+    else process.env.CHAT_TURN_TTL_SECONDS = value;
+
+    const providers = JobStoreModule.register().providers as Array<{
+      provide: unknown;
+      useFactory: (...args: unknown[]) => unknown;
+    }>;
+    const client = providers[0].useFactory();
+    const store = providers.find((p) => p.provide === JOB_STORE)!.useFactory(client) as {
+      opts: { turnTtlSeconds: number };
+    };
+
+    expect(store.opts.turnTtlSeconds).toBe(expected);
+  });
+
   it('fails fast when INFERENCE_JOBS_REDIS_URL is missing', () => {
     delete process.env.INFERENCE_JOBS_REDIS_URL;
 

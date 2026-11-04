@@ -168,6 +168,7 @@ describe('detached chat turns on the wire', () => {
       keyPrefix: 'inf:',
       resultTtlSeconds: 86_400,
       bodyTtlSeconds: 7_200,
+      turnTtlSeconds: 3_600,
       maxJobBytes: 5_242_880,
     });
   });
@@ -538,16 +539,27 @@ describe('detached chat turns on the wire', () => {
   });
 
   it('every turn key carries a TTL, and an append cannot resurrect an evicted turn', async () => {
+    const expectTurnTtl = async () => {
+      for (const key of [KEY, `${KEY}:sse`]) {
+        const ttl = await redis.ttl(key);
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(3_600);
+      }
+    };
     await store.beginTurn(TURN, 'alice');
+    expect(await redis.ttl(KEY)).toBeLessThanOrEqual(3_600);
     await store.appendTurn(TURN, Buffer.from('x'));
-    expect(await redis.ttl(KEY)).toBeGreaterThan(0);
-    expect(await redis.ttl(`${KEY}:sse`)).toBeGreaterThan(0);
+    await expectTurnTtl();
+    await store.finishTurn(TURN, 'done');
+    await expectTurnTtl();
+    await store.beginTurn(`${TURN}-2`, 'alice');
+    await store.appendTurn(`${TURN}-2`, Buffer.from('x'));
 
-    await redis.del(`${KEY}:sse`);
-    await expect(store.appendTurn(TURN, Buffer.from('y'))).rejects.toThrow();
-    await redis.del(KEY);
-    await expect(store.appendTurn(TURN, Buffer.from('y'))).rejects.toThrow();
-    expect(await redis.exists(KEY)).toBe(0);
+    await redis.del(`${KEY}-2:sse`);
+    await expect(store.appendTurn(`${TURN}-2`, Buffer.from('y'))).rejects.toThrow();
+    await redis.del(`${KEY}-2`);
+    await expect(store.appendTurn(`${TURN}-2`, Buffer.from('y'))).rejects.toThrow();
+    expect(await redis.exists(`${KEY}-2`)).toBe(0);
   });
 
   it('flag off: the header is ignored, Redis is untouched, a disconnect aborts upstream', async () => {

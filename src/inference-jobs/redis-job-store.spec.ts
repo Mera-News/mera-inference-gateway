@@ -6,6 +6,7 @@ const OPTS: RedisJobStoreOptions = {
   keyPrefix: 'inf:',
   resultTtlSeconds: 86_400,
   bodyTtlSeconds: 7_200,
+  turnTtlSeconds: 3_600,
   maxJobBytes: 5_242_880,
 };
 

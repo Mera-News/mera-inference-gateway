@@ -46,6 +46,11 @@ export class JobStoreModule {
               keyPrefix: process.env.INFERENCE_JOBS_KEY_PREFIX ?? 'inf:',
               resultTtlSeconds: Number(process.env.INFERENCE_JOBS_RESULT_TTL_SECONDS ?? 86_400),
               bodyTtlSeconds: Number(process.env.INFERENCE_JOBS_BODY_TTL_SECONDS ?? 7_200),
+              // A bad value here would leave a turn hash with no TTL at all.
+              turnTtlSeconds:
+                Number(process.env.CHAT_TURN_TTL_SECONDS) > 0
+                  ? Number(process.env.CHAT_TURN_TTL_SECONDS)
+                  : 3_600,
               maxJobBytes: Number(process.env.INFERENCE_MAX_JOB_BYTES ?? 5_242_880),
             });
             new Logger(JobStoreModule.name).log('Job store backend: redis');
