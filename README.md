@@ -249,6 +249,10 @@ Omitting `languageCode` is a deliberate, valid request, not a degraded one: the 
 
 ---
 
+### `GET /api/attestation/compose-file`
+
+Relays one file of NEAR's public `nearai/cvm-compose-files` repo at an exact commit, for the app's verify tap. Query: `commit` (40 lowercase hex) and `file` (`prod/<name>.yaml`). Returns the bytes as `text/plain`; the app checks them against the hash in NEAR's attested action log. 400 on an invalid query, 502 when the file can't be fetched, 503 at the per-instance cap.
+
 ### `GET /api/attestation/report`
 
 Proxies the NEAR AI TEE attestation report. Use this to retrieve the model's current signing public key before encrypting a message.

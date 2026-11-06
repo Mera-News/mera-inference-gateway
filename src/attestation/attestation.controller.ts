@@ -1,14 +1,26 @@
-import { Controller, Get, Logger, Req, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Logger, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AttestationService } from './attestation.service';
+import { ComposeFileRelay } from './compose-file';
 
 @Controller('api')
 @UseGuards(AuthGuard)
 export class AttestationController {
   private readonly logger = new Logger(AttestationController.name);
+  private readonly composeFiles = new ComposeFileRelay();
 
   constructor(private readonly attestationService: AttestationService) {}
+
+  @Get('attestation/compose-file')
+  async getComposeFile(
+    @Query('commit') commit: unknown,
+    @Query('file') file: unknown,
+    @Res() res: Response,
+  ) {
+    const body = await this.composeFiles.fetchFile(commit, file);
+    res.status(200).type('text/plain; charset=utf-8').send(body);
+  }
 
   @Get('attestation/report')
   async getReport(@Req() req: Request, @Res() res: Response) {
