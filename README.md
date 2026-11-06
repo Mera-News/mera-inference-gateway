@@ -258,7 +258,7 @@ Proxies the NEAR AI TEE attestation report. Use this to retrieve the model's cur
 
 **Query parameters:** Forwarded verbatim to NEAR AI (e.g. `model`, `nonce`, `signing_address`).
 
-**Response:** NEAR AI attestation report JSON including `signing_public_key`, `signing_address`, `signing_algo`, `intel_quote`, and `nvidia_payload`.
+**Response:** With a `nonce`, the full NEAR AI attestation report JSON, including `signing_public_key`, `signing_address`, `signing_algo`, `intel_quote` and `nvidia_payload`. When that nonce is non-empty and NVIDIA answers in time, `model_attestations[0]` also carries `nvidia_attestation`: `{ tokens, keys }`, NVIDIA's signed verdict and the keys that signed it. The gateway relays these and never judges them, and the field is absent on any NVIDIA failure. Without a `nonce`, the report is cut down to the signing fields.
 
 ---
 

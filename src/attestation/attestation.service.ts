@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UPSTREAM_BASE_URL } from '../constants';
+import { GpuAttestationRelay } from './gpu-attestation';
 
 interface CachedAttestation {
   status: number;
@@ -36,8 +37,9 @@ const ATTESTATION_CACHE_MAX_ENTRIES = 20;
  * turn, over the user's mobile link, and reads 64 bytes of each. Only the
  * user-initiated verify tap consumes the quote and the GPU payload, and that
  * fetch always carries a `nonce` -- so a nonce-free request gets the slim
- * projection and a nonce'd request gets the report verbatim. Nothing about
- * the E2EE posture changes: the key material is passed through untouched.
+ * projection and a nonce'd request gets the full report, plus NVIDIA's signed
+ * GPU verdict when NVIDIA answers in time (see gpu-attestation.ts). Nothing
+ * about the E2EE posture changes: the key material is passed through untouched.
  */
 const HOT_PATH_ATTESTATION_FIELDS = [
   'model_name',
@@ -87,11 +89,17 @@ function requestsFullReport(queryString: string): boolean {
   return /(^|&)nonce=/.test(queryString);
 }
 
+/** NVIDIA's verdict is bound to the nonce, so an empty one has nothing to prove. */
+function carriesNonce(queryString: string): boolean {
+  return /(^|&)nonce=[^&]/.test(queryString);
+}
+
 @Injectable()
 export class AttestationService {
   private readonly logger = new Logger(AttestationService.name);
   private readonly apiKey: string;
   private readonly cache = new Map<string, CachedAttestation>();
+  private readonly gpuAttestation = new GpuAttestationRelay();
 
   constructor(private configService: ConfigService) {
     const key = this.configService.get<string>('NEAR_AI_API_KEY', '');
@@ -102,8 +110,8 @@ export class AttestationService {
   }
 
   /** Proxy (with a short-lived cache): forward query params as-is to the
-   *  attestation endpoint. Only 200 responses are cached; everything else
-   *  passes through uncached, unbuffered. */
+   *  attestation endpoint. Only nonce-free 200 responses are cached; everything
+   *  else passes through uncached, and non-200s unbuffered. */
   async proxyAttestationReport(queryString: string): Promise<globalThis.Response> {
     const cacheKey = queryString;
     const cached = this.cache.get(cacheKey);
@@ -140,7 +148,11 @@ export class AttestationService {
       }
 
       const rawBody = await upstream.text();
-      const body = requestsFullReport(queryString) ? rawBody : slimAttestationForHotPath(rawBody);
+      const fullReport = requestsFullReport(queryString);
+      let body = fullReport ? rawBody : slimAttestationForHotPath(rawBody);
+      if (carriesNonce(queryString)) {
+        body = await this.gpuAttestation.attach(rawBody, startedAt);
+      }
       const contentType = upstream.headers.get('content-type');
       const entry: CachedAttestation = {
         status: upstream.status,
@@ -148,7 +160,8 @@ export class AttestationService {
         contentType,
         fetchedAt: Date.now(),
       };
-      this.setCache(cacheKey, entry);
+      // A nonce is single-use, so a stored report could only ever be a stale replay.
+      if (!fullReport) this.setCache(cacheKey, entry);
       return this.toResponse(entry);
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') {
