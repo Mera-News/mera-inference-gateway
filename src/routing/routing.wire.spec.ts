@@ -83,7 +83,12 @@ describe('routing over HTTP (real module wiring, Redis mocked)', () => {
       .expect(200);
     expect(res.body.lanes['chat-tools']).toEqual({
       state: 'degraded',
-      profiles: ['near/qwen3.6-35b-a3b', 'redpill/qwen3.8-27b'],
+      profiles: [
+        'near/qwen3.6-35b-a3b',
+        'redpill/qwen3.8-27b',
+        'redpill/gemma-4-31b',
+        'redpill/kimi-k2.6',
+      ],
     });
     // the 3s snapshot cache is dropped by the change on this instance
     const after = await request(app.getHttpServer()).get('/v1/routing').expect(200);

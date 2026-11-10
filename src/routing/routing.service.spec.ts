@@ -3,6 +3,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 
 const RedisMock = require('ioredis-mock');
+import { PROFILES } from './profiles';
 import { RoutingService } from './routing.service';
 
 const NEAR = 'near/qwen3.8-27b';
@@ -44,7 +45,13 @@ describe('RoutingService', () => {
     expect(body.version).toBe(0);
     expect(body.lanes['chat-tools']).toEqual({
       state: 'ok',
-      profiles: ['near/qwen3.8-27b', 'near/qwen3.6-35b-a3b', 'redpill/qwen3.8-27b'],
+      profiles: [
+        'near/qwen3.8-27b',
+        'near/qwen3.6-35b-a3b',
+        'redpill/qwen3.8-27b',
+        'redpill/gemma-4-31b',
+        'redpill/kimi-k2.6',
+      ],
     });
     expect(body.lanes.scoring.profiles[0]).toBe('near/qwen3.6-35b-a3b');
     expect(await svc.isDown('near', NEAR_MODEL)).toBe(false);
@@ -86,7 +93,7 @@ describe('RoutingService', () => {
 
   it('logs routing_all_down when the last profile goes down', async () => {
     const { svc } = setup();
-    for (const id of ['near/qwen3.8-27b', 'near/qwen3.6-35b-a3b', 'redpill/qwen3.8-27b']) {
+    for (const id of Object.keys(PROFILES)) {
       await svc.setPin(id, 'down');
     }
     expect(errorSpy).toHaveBeenCalledWith('routing_all_down');
@@ -141,7 +148,7 @@ describe('RoutingService', () => {
   it('schedules a 60s probe per profile at boot, unless probes are disabled', async () => {
     const on = setup();
     await on.svc.onApplicationBootstrap();
-    expect(on.queue.upsertJobScheduler).toHaveBeenCalledTimes(3);
+    expect(on.queue.upsertJobScheduler).toHaveBeenCalledTimes(Object.keys(PROFILES).length);
     expect(on.queue.upsertJobScheduler).toHaveBeenCalledWith(
       `probe:${NEAR}`,
       { every: 60_000 },
