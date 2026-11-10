@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest, AuthenticatedUser } from '../auth/auth.guard';
+import { RoutingService } from '../routing/routing.service';
 import { InferenceJobsController } from './inference-jobs.controller';
 import { InferenceJobsService } from './inference-jobs.service';
 import { JOB_STORE } from './job-store.port';
@@ -22,16 +23,25 @@ describe('InferenceJobsController', () => {
   let controller: InferenceJobsController;
   let jobsService: { submit: jest.Mock };
   let store: { getResultsView: jest.Mock };
+  let routing: { allDown: jest.Mock; unavailableBody: jest.Mock };
 
   beforeEach(async () => {
     store = { getResultsView: jest.fn() };
     jobsService = { submit: jest.fn() };
+    routing = {
+      allDown: jest.fn().mockResolvedValue(false),
+      unavailableBody: jest.fn().mockResolvedValue({
+        error: { code: 'model_unavailable', message: 'paused' },
+        routing: { version: 7 },
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [InferenceJobsController],
       providers: [
         { provide: InferenceJobsService, useValue: jobsService },
         { provide: JOB_STORE, useValue: store },
+        { provide: RoutingService, useValue: routing },
       ],
     })
       // The controller is decorated with @UseGuards(AuthGuard); we exercise the
@@ -45,6 +55,27 @@ describe('InferenceJobsController', () => {
 
   describe('submit', () => {
     const dto = { expoPushToken: 'tok', requests: [{ id: 'r', body: {} }] };
+
+    it('answers 503 model_unavailable with the table, before anything is enqueued, when the job models are down', async () => {
+      routing.allDown.mockResolvedValue(true);
+      const req = makeReq({ id: 'user-1', subscriptionIsActive: true });
+      const job = {
+        requests: [
+          { id: 'a', body: { model: 'm' } },
+          { id: 'b', body: { model: 'm' } },
+        ],
+      };
+      const err = await controller
+        .submit(req, job as never, undefined, undefined, undefined, 'redpill')
+        .catch((e) => e);
+      expect(err.getStatus()).toBe(503);
+      expect(err.getResponse()).toEqual({
+        error: { code: 'model_unavailable', message: 'paused' },
+        routing: { version: 7 },
+      });
+      expect(routing.allDown).toHaveBeenCalledWith('redpill', ['m']);
+      expect(jobsService.submit).not.toHaveBeenCalled();
+    });
 
     it('delegates to the service for JWT-authed callers', async () => {
       jobsService.submit.mockResolvedValue({

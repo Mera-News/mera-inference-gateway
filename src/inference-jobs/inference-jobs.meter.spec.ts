@@ -100,7 +100,13 @@ describe('POST /v1/inference/jobs with the read meter', () => {
       { mint: () => 'mc.tok' } as never,
       meter,
     );
-    controller = new InferenceJobsController(service, store as never);
+    controller = new InferenceJobsController(
+      service,
+      store as never,
+      {
+        allDown: async () => false,
+      } as never,
+    );
   }
 
   beforeEach(async () => {

@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Readable } from 'stream';
+import { RoutingService } from '../routing/routing.service';
 import { PROVIDER_JOB_KEY } from './provider-key';
 import { parseProvider } from '../constants';
 import { AuthGuard } from '../auth/auth.guard';
@@ -44,6 +45,7 @@ export class InferenceJobsController {
   constructor(
     private readonly jobs: InferenceJobsService,
     @Inject(JOB_STORE) private readonly store: JobStore,
+    private readonly routing: RoutingService,
   ) {}
 
   @Post('jobs')
@@ -73,6 +75,18 @@ export class InferenceJobsController {
     }
     const provider = parseProvider(providerHeader);
     if (!provider) throw new BadRequestException('Unknown X-Mera-Provider');
+    // Nothing to run on: answer before the meter, the store or the queue is touched,
+    // so the app moves to its next model within the same request.
+    const models = [
+      ...new Set(
+        dto.requests
+          .map((r) => (r.body as { model?: unknown } | undefined)?.model)
+          .filter((m): m is string => typeof m === 'string'),
+      ),
+    ];
+    if (await this.routing.allDown(provider, models)) {
+      throw new HttpException(await this.routing.unavailableBody(), 503);
+    }
     // The job store keeps one string record per job and replays it as upstream
     // headers, so the provider rides in it; the worker takes it back out.
     if (provider !== 'near') {

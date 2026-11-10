@@ -157,3 +157,15 @@ describe('RoutingService', () => {
     expect(await redis.hget('bull-test:routing-table:pins', NEAR)).toBe('down');
   });
 });
+
+describe('RoutingService.allDown', () => {
+  it('is true only when every named model is down, or the provider has no key', async () => {
+    const a = setup();
+    await a.svc.setPin(NEAR, 'down');
+    expect(await a.svc.allDown('near', [NEAR_MODEL])).toBe(true);
+    expect(await a.svc.allDown('near', [NEAR_MODEL, 'Qwen/Qwen3.6-35B-A3B-FP8'])).toBe(false);
+    expect(await a.svc.allDown('near', [])).toBe(false);
+    const b = setup({ REDPILL_API_KEY: '' });
+    expect(await b.svc.allDown('redpill', ['anything'])).toBe(true);
+  });
+});

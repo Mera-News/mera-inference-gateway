@@ -67,7 +67,14 @@ export class LlmInferenceProcessor extends WorkerHost {
           error: `upstream ${upstream.status}`,
         };
       } else {
-        const json = (await upstream.json()) as unknown;
+        let json: unknown;
+        try {
+          json = await upstream.json();
+        } catch (err) {
+          // An empty or cut-off 2xx is a model-class failure: let the table flip for everyone.
+          this.chat.reportEmpty(provider, forwardBody);
+          throw err;
+        }
         result = { id: request.id, ok: true, response: json, error: null };
       }
     } catch (err) {

@@ -367,6 +367,19 @@ export class CompletionsController {
       return;
     }
 
+    // Every item on a model that is down: nothing to try, answer at once.
+    const models = [
+      ...new Set(
+        requests
+          .map((r) => (r as { model?: unknown } | null)?.model)
+          .filter((m): m is string => typeof m === 'string'),
+      ),
+    ];
+    if (await this.routing.allDown(provider, models)) {
+      res.status(503).json(await this.routing.unavailableBody());
+      return;
+    }
+
     const e2eeHeaders = this.extractE2EEHeaders(req);
     const snapOnEntry = this.queue.snapshot();
     this.logger.debug(

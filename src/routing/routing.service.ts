@@ -77,6 +77,15 @@ export class RoutingService implements OnApplicationBootstrap {
     return (await this.snapshot()).effective[id] === 'down';
   }
 
+  /** True when a submit has nothing to run on: no key for the provider, or every
+   *  model it names is marked down. A mixed set still runs; the down items fail alone. */
+  async allDown(provider: Provider, models: string[]): Promise<boolean> {
+    if (!this.keyFor(provider)) return true;
+    if (models.length === 0) return false;
+    const downs = await Promise.all(models.map((m) => this.isDown(provider, m)));
+    return downs.every(Boolean);
+  }
+
   /** Same answer from the cached table, no I/O: for the proxy hot path, where the
    *  request's own header stamp has just refreshed the cache. Unknown reads as up. */
   isDownCached(provider: Provider, model: string): boolean {

@@ -2,12 +2,13 @@ import { Module } from '@nestjs/common';
 import { InferenceJobsController } from './inference-jobs.controller';
 import { InferenceJobsService } from './inference-jobs.service';
 import { ReadMeterService } from './read-meter.service';
+import { RoutingModule } from '../routing/routing.module';
 import { QueuesModule } from '../queues/queues.module';
 
 // JOB_STORE is provided by the global JobStoreModule (composition root in
 // app.module.ts), so no storage imports here.
 @Module({
-  imports: [QueuesModule],
+  imports: [QueuesModule, RoutingModule],
   controllers: [InferenceJobsController],
   providers: [InferenceJobsService, ReadMeterService],
 })

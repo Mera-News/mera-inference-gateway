@@ -49,10 +49,10 @@ function makeStoreMock(context: RequestContext | null) {
 // ---------------------------------------------------------------------------
 
 describe('LlmInferenceProcessor', () => {
-  let chatMock: { proxyChat: jest.Mock };
+  let chatMock: { proxyChat: jest.Mock; reportEmpty: jest.Mock };
 
   beforeEach(() => {
-    chatMock = { proxyChat: jest.fn() };
+    chatMock = { proxyChat: jest.fn(), reportEmpty: jest.fn() };
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
@@ -369,5 +369,16 @@ describe('LlmInferenceProcessor', () => {
         provider: 'redpill',
       },
     );
+  });
+
+  it('reports an empty 2xx body to passive marking, so the table can flip for everyone', async () => {
+    const store = makeStoreMock(makeContext({ e2eeSession: { 'X-Mera-Provider': 'redpill' } }));
+    const empty = makeResponse({ ok: true });
+    empty.json.mockRejectedValue(new SyntaxError('Unexpected end of JSON input'));
+    chatMock.proxyChat.mockResolvedValue(empty);
+    const proc = new LlmInferenceProcessor(chatMock as never, store as never);
+    await proc.process(makeJob('j', 0) as never);
+    expect(chatMock.reportEmpty).toHaveBeenCalledWith('redpill', expect.anything());
+    expect(store.appendResult).toHaveBeenCalledWith('j', 0, expect.objectContaining({ ok: false }));
   });
 });

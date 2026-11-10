@@ -113,6 +113,7 @@ function makeUpstream(
 const ROUTING_UP = {
   keyFor: () => 'k',
   isDown: async () => false,
+  allDown: async () => false,
   unavailableBody: async () => ({}),
 } as unknown as RoutingService;
 
@@ -677,6 +678,32 @@ describe('upstreamErrorMessage', () => {
 });
 
 describe('provider header and fast-fail', () => {
+  it('batch answers 503 model_unavailable when every item targets a down model, with no upstream call', async () => {
+    const chatService = { proxyChat: jest.fn(), createDeadline: jest.fn() };
+    const routing = {
+      keyFor: () => 'k',
+      allDown: jest.fn().mockResolvedValue(true),
+      unavailableBody: async () => ({ error: { code: 'model_unavailable' }, routing: {} }),
+    };
+    const queue = { canAccept: jest.fn().mockReturnValue(true) };
+    const controller = new CompletionsController(
+      chatService as unknown as ChatService,
+      queue as unknown as InferenceQueueService,
+      TURNS_OFF,
+      routing as unknown as RoutingService,
+    );
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const req = {
+      headers: {},
+      body: { requests: [{ model: 'm' }, { model: 'm' }] },
+      user: { id: 'u' },
+    };
+    await controller.batchChatCompletions(req as never, res as never);
+    expect(routing.allDown).toHaveBeenCalledWith('near', ['m']);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(chatService.proxyChat).not.toHaveBeenCalled();
+  });
+
   const mkRes = () => {
     const res = { status: jest.fn(), json: jest.fn(), send: jest.fn() };
     res.status.mockReturnValue(res);
