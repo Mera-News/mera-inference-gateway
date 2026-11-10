@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { UPSTREAM_BASE_URL } from '../constants';
+import { PROVIDERS, type Provider } from '../constants';
+import { RoutingService } from '../routing/routing.service';
 
 /**
  * Thrown when an item's deadline (stamped at request entry) had already elapsed
@@ -14,7 +15,17 @@ export class DeadlineElapsedError extends Error {
   }
 }
 
+/** The (provider, model) is marked down, or the provider has no key configured. */
+export class ModelUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ModelUnavailableError';
+  }
+}
+
 export interface ProxyChatOptions {
+  /** Upstream provider; absent = near. */
+  provider?: Provider;
   /**
    * Absolute epoch-ms deadline for this item, stamped when the request entered
    * the controller (see `ChatService.createDeadline`). Bounds queue wait +
@@ -33,7 +44,10 @@ export class ChatService {
   private readonly timeoutMs: number;
   private readonly apiKey: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private routing: RoutingService,
+  ) {
     const key = this.configService.get<string>('NEAR_AI_API_KEY', '');
     if (!key) {
       throw new Error('NEAR_AI_API_KEY environment variable is not set');
@@ -66,6 +80,7 @@ export class ChatService {
     const deadlineAt = options?.deadlineAt ?? startedAt + this.timeoutMs;
     const remainingMs = deadlineAt - startedAt;
     const model = this.modelOf(body);
+    const provider = options?.provider ?? 'near';
     const user = options?.userId ?? 'unknown';
 
     // The budget was consumed while this item waited for a queue slot — the
@@ -85,6 +100,12 @@ export class ChatService {
       throw new DeadlineElapsedError('client disconnected before dispatch');
     }
 
+    // Fast-fail a model the probes have marked down, and a provider with no key.
+    const apiKey = provider === 'near' ? this.apiKey : this.routing.keyFor(provider);
+    if (!apiKey || this.routing.isDownCached(provider, model)) {
+      throw new ModelUnavailableError(`${provider} model unavailable`);
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remainingMs);
 
@@ -93,11 +114,11 @@ export class ChatService {
     options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
 
     try {
-      const response = await fetch(`${UPSTREAM_BASE_URL}/chat/completions`, {
+      const response = await fetch(`${PROVIDERS[provider].baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           ...extraHeaders,
         },
         body: JSON.stringify(body),
@@ -105,6 +126,7 @@ export class ChatService {
       });
       const elapsedMs = Date.now() - startedAt;
       this.logger.debug(`upstream responded status=${response.status} elapsedMs=${elapsedMs}`);
+      if (response.status >= 500) this.routing.reportFailure(provider, model);
       return response;
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
@@ -115,6 +137,7 @@ export class ChatService {
               `model=${model} user=${user}`,
           );
         } else {
+          this.routing.reportFailure(provider, model);
           this.logger.error(
             `upstream request timed out after ${elapsedMs}ms ` +
               `(limit=${this.timeoutMs}ms remainingAtDispatch=${remainingMs}ms) ` +
@@ -122,6 +145,7 @@ export class ChatService {
           );
         }
       } else {
+        this.routing.reportFailure(provider, model);
         this.logger.error(
           `upstream fetch failed after ${elapsedMs}ms: ${(error as Error)?.message ?? String(error)}`,
           error instanceof Error ? error.stack : undefined,
@@ -132,6 +156,11 @@ export class ChatService {
       clearTimeout(timer);
       options?.signal?.removeEventListener('abort', onExternalAbort);
     }
+  }
+
+  /** A 2xx with no body is a model-class failure too; the controller found it. */
+  reportEmpty(provider: Provider, body: unknown): void {
+    this.routing.reportFailure(provider, this.modelOf(body));
   }
 
   /**

@@ -354,4 +354,20 @@ describe('LlmInferenceProcessor', () => {
     // original empty array is untouched
     expect(originalMessages).toHaveLength(0);
   });
+
+  it('takes the provider out of the stored session: redpill goes upstream, the key is not forwarded as a header', async () => {
+    const store = makeStoreMock(
+      makeContext({ e2eeSession: { 'X-Signing-Algo': 'ecdsa', 'X-Mera-Provider': 'redpill' } }),
+    );
+    chatMock.proxyChat.mockResolvedValue(makeResponse({ ok: true, jsonValue: {} }));
+    const proc = new LlmInferenceProcessor(chatMock as never, store as never);
+    await proc.process(makeJob('j', 0) as never);
+    expect(chatMock.proxyChat).toHaveBeenCalledWith(
+      expect.anything(),
+      { 'X-Signing-Algo': 'ecdsa' },
+      {
+        provider: 'redpill',
+      },
+    );
+  });
 });

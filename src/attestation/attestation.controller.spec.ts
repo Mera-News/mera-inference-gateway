@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import type { RoutingService } from '../routing/routing.service';
 import { AttestationController } from './attestation.controller';
 import { AttestationService } from './attestation.service';
 
@@ -10,7 +11,7 @@ function makeService(): MockAttestationService {
 }
 
 function makeReq(url: string): Request {
-  return { url } as unknown as Request;
+  return { url, headers: {} } as unknown as Request;
 }
 
 function makeRes(headersSent = false): Response {
@@ -50,7 +51,14 @@ describe('AttestationController', () => {
 
   beforeEach(() => {
     service = makeService();
-    controller = new AttestationController(service as unknown as AttestationService);
+    controller = new AttestationController(
+      service as unknown as AttestationService,
+      {
+        keyFor: () => 'k',
+        isDown: async () => false,
+        unavailableBody: async () => ({}),
+      } as unknown as RoutingService,
+    );
     jest.spyOn(Logger.prototype, 'error').mockImplementation();
     jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     jest.spyOn(Logger.prototype, 'debug').mockImplementation();
@@ -75,7 +83,7 @@ describe('AttestationController', () => {
 
         await controller.getReport(req, res);
 
-        expect(service.proxyAttestationReport).toHaveBeenCalledWith('nonce=abc');
+        expect(service.proxyAttestationReport).toHaveBeenCalledWith('nonce=abc', 'near');
       });
 
       it('sets status 200, Content-Type header, and sends the body', async () => {
@@ -130,7 +138,7 @@ describe('AttestationController', () => {
 
         await controller.getReport(req, res);
 
-        expect(service.proxyAttestationReport).toHaveBeenCalledWith('');
+        expect(service.proxyAttestationReport).toHaveBeenCalledWith('', 'near');
       });
     });
 

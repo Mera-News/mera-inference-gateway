@@ -14,7 +14,9 @@ import type { Response } from 'express';
 import { Readable } from 'stream';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
-import { ChatService, DeadlineElapsedError } from './chat.service';
+import { parseProvider } from '../constants';
+import { RoutingService } from '../routing/routing.service';
+import { ChatService, DeadlineElapsedError, ModelUnavailableError } from './chat.service';
 import { ChatTurnService, TURN_ID_PATTERN, type TurnRelay } from './chat-turn.service';
 import { InferenceQueueService } from './inference-queue.service';
 
@@ -77,11 +79,27 @@ export class CompletionsController {
     private readonly chatService: ChatService,
     private readonly queue: InferenceQueueService,
     private readonly turns: ChatTurnService,
+    private readonly routing: RoutingService,
   ) {}
 
   @Post('chat/completions')
   async chatCompletions(@Req() req: AuthenticatedRequest, @Res() res: Response) {
     const userId = req.user?.id;
+
+    const provider = parseProvider(req.headers['x-mera-provider']);
+    if (!provider) {
+      res.status(400).json({ error: 'Unknown X-Mera-Provider' });
+      return;
+    }
+    // A model marked down (or a provider with no key) answers at once, before a turn is claimed.
+    const requested = (req.body as { model?: unknown } | undefined)?.model;
+    if (
+      !this.routing.keyFor(provider) ||
+      (typeof requested === 'string' && (await this.routing.isDown(provider, requested)))
+    ) {
+      res.status(503).json(await this.routing.unavailableBody());
+      return;
+    }
 
     // An old app sends no header, and with the flag off it is ignored. A
     // capability token cannot read a turn back, so it gets no detached turn.
@@ -94,7 +112,13 @@ export class CompletionsController {
       if (await this.turns.claim(turnId, userId)) {
         const clientGone = this.clientAbortSignal(req, res);
         await this.turns.run(
-          { id: turnId, userId, body: req.body, e2eeHeaders: this.extractE2EEHeaders(req) },
+          {
+            id: turnId,
+            userId,
+            body: req.body,
+            e2eeHeaders: this.extractE2EEHeaders(req),
+            provider,
+          },
           this.turnRelay(res, clientGone.signal, userId),
           clientGone.signal,
         );
@@ -112,6 +136,7 @@ export class CompletionsController {
     try {
       const e2eeHeaders = this.extractE2EEHeaders(req);
       const upstream = await this.chatService.proxyChat(req.body, e2eeHeaders, {
+        provider,
         deadlineAt,
         signal: clientGone.signal,
         userId,
@@ -142,6 +167,7 @@ export class CompletionsController {
           this.logger.error(
             `Upstream empty body user=${userId ?? 'unknown'} status=${upstream.status}`,
           );
+          this.chatService.reportEmpty(provider, req.body);
           res.status(502).json({ error: 'Upstream returned an empty body' });
           return;
         }
@@ -199,6 +225,7 @@ export class CompletionsController {
         this.logger.error(
           `Upstream empty stream user=${userId ?? 'unknown'} status=${upstream.status}`,
         );
+        this.chatService.reportEmpty(provider, req.body);
         res.status(502).json({ error: 'Upstream returned an empty body' });
         return;
       }
@@ -315,6 +342,12 @@ export class CompletionsController {
     // Destructuring it directly would throw a TypeError (→ 500); degrade to 400.
     const { requests } = (req.body ?? {}) as { requests?: unknown[] };
 
+    const provider = parseProvider(req.headers['x-mera-provider']);
+    if (!provider) {
+      res.status(400).json({ error: 'Unknown X-Mera-Provider' });
+      return;
+    }
+
     if (!Array.isArray(requests) || requests.length === 0) {
       res.status(400).json({ error: '`requests` must be a non-empty array' });
       return;
@@ -359,6 +392,7 @@ export class CompletionsController {
               }`,
             );
             const upstream = await this.chatService.proxyChat(input, e2eeHeaders, {
+              provider,
               deadlineAt,
               signal: clientGone.signal,
               userId,
@@ -390,6 +424,9 @@ export class CompletionsController {
 
             return { index, response: json };
           } catch (error) {
+            if (error instanceof ModelUnavailableError) {
+              return { index, error: 'model_unavailable' };
+            }
             if (error instanceof DeadlineElapsedError) {
               this.logger.warn(
                 `Batch[${index}] ${error.message} user=${userId ?? 'unknown'} — no upstream call made`,

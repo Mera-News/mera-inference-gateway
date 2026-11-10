@@ -6,6 +6,7 @@ import {
   type TurnRead,
   type TurnStatus,
 } from '../inference-jobs/job-store.port';
+import type { Provider } from '../constants';
 import { ChatService } from './chat.service';
 
 /** How often the tee writes to Redis and checks its deadlines. */
@@ -40,6 +41,7 @@ export interface TurnRequest {
   userId: string;
   body: unknown;
   e2eeHeaders: Record<string, string>;
+  provider?: Provider;
 }
 
 /** Raw ciphertext on its way to Redis. Writes stay in order; one failure ends them for
@@ -194,6 +196,7 @@ export class ChatTurnService {
 
     try {
       const upstream = await this.chat.proxyChat(turn.body, turn.e2eeHeaders, {
+        provider: turn.provider,
         deadlineAt: this.chat.createDeadline(),
         signal: stop.signal,
         userId,

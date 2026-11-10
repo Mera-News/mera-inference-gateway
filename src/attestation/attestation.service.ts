@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { UPSTREAM_BASE_URL } from '../constants';
+import { PROVIDERS, type Provider } from '../constants';
 import { GpuAttestationRelay } from './gpu-attestation';
 
 interface CachedAttestation {
@@ -112,8 +112,17 @@ export class AttestationService {
   /** Proxy (with a short-lived cache): forward query params as-is to the
    *  attestation endpoint. Only nonce-free 200 responses are cached; everything
    *  else passes through uncached, and non-200s unbuffered. */
-  async proxyAttestationReport(queryString: string): Promise<globalThis.Response> {
-    const cacheKey = queryString;
+  async proxyAttestationReport(
+    queryString: string,
+    provider: Provider = 'near',
+  ): Promise<globalThis.Response> {
+    // Provider is part of the key: the same ?model= query is a different report per provider.
+    const cacheKey = `${provider}:${queryString}`;
+    const apiKey =
+      provider === 'near'
+        ? this.apiKey
+        : this.configService.get<string>(PROVIDERS[provider].keyEnv, '');
+    if (!apiKey) throw new Error(`${provider} API key is not set`);
     const cached = this.cache.get(cacheKey);
     if (cached) {
       const ageMs = Date.now() - cached.fetchedAt;
@@ -125,7 +134,7 @@ export class AttestationService {
     }
     this.logger.debug('Attestation cache miss');
 
-    const url = `${UPSTREAM_BASE_URL}/attestation/report${queryString ? `?${queryString}` : ''}`;
+    const url = `${PROVIDERS[provider].baseUrl}/attestation/report${queryString ? `?${queryString}` : ''}`;
     this.logger.debug(`Proxying attestation report: ${url}`);
 
     const controller = new AbortController();
@@ -135,7 +144,7 @@ export class AttestationService {
     try {
       const upstream = await fetch(url, {
         method: 'GET',
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: { Authorization: `Bearer ${apiKey}` },
         signal: controller.signal,
       });
       const elapsedMs = Date.now() - startedAt;

@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
+import type { RoutingService } from '../routing/routing.service';
 import { ChatService, DeadlineElapsedError } from './chat.service';
 import { ChatTurnService } from './chat-turn.service';
 import { CompletionsController } from './completions.controller';
@@ -109,6 +110,12 @@ function makeUpstream(
 // Shared setup helpers
 // ---------------------------------------------------------------------------
 
+const ROUTING_UP = {
+  keyFor: () => 'k',
+  isDown: async () => false,
+  unavailableBody: async () => ({}),
+} as unknown as RoutingService;
+
 function makeControllerAndDeps() {
   const chatService = { proxyChat: jest.fn(), createDeadline: jest.fn(() => Date.now() + 120_000) };
   const queue = {
@@ -120,6 +127,7 @@ function makeControllerAndDeps() {
     chatService as unknown as ChatService,
     queue as unknown as InferenceQueueService,
     TURNS_OFF,
+    ROUTING_UP,
   );
   return { chatService, queue, controller };
 }
@@ -275,6 +283,7 @@ describe('CompletionsController (batch)', () => {
       chatService as unknown as ChatService,
       queue as unknown as InferenceQueueService,
       TURNS_OFF,
+      ROUTING_UP,
     );
   });
 
@@ -493,7 +502,12 @@ describe('CompletionsController (deadline + client disconnect, real queue)', () 
     queue = new InferenceQueueService(
       makeQueueConfig({ INFERENCE_MAX_CONCURRENCY: 1, INFERENCE_MAX_QUEUE_DEPTH: 200 }),
     );
-    controller = new CompletionsController(chatService as unknown as ChatService, queue, TURNS_OFF);
+    controller = new CompletionsController(
+      chatService as unknown as ChatService,
+      queue,
+      TURNS_OFF,
+      ROUTING_UP,
+    );
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -659,5 +673,55 @@ describe('upstreamErrorMessage', () => {
     expect(upstreamErrorMessage(JSON.stringify({ detail: 'SENTINEL' }))).toBe(
       '(no upstream error message)',
     );
+  });
+});
+
+describe('provider header and fast-fail', () => {
+  const mkRes = () => {
+    const res = { status: jest.fn(), json: jest.fn(), send: jest.fn() };
+    res.status.mockReturnValue(res);
+    return res;
+  };
+  const mkReq = (headers: Record<string, string>) =>
+    ({ headers, body: { model: 'm', messages: [] }, user: { id: 'u' }, on: jest.fn() }) as never;
+
+  it('answers 400 for an unknown X-Mera-Provider on chat and batch', async () => {
+    const { controller, chatService } = makeControllerAndDeps();
+    for (const call of [
+      (r: never, s: never) => controller.chatCompletions(r, s),
+      (r: never, s: never) => controller.batchChatCompletions(r, s),
+    ]) {
+      const res = mkRes();
+      const req = mkReq({ 'x-mera-provider': 'openai' }) as unknown as { body: unknown };
+      req.body = { requests: [{ model: 'm' }] };
+      await call(req as never, res as never);
+      expect(res.status).toHaveBeenCalledWith(400);
+    }
+    expect(chatService.proxyChat).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 model_unavailable with the routing body for a model marked down', async () => {
+    const chatService = { proxyChat: jest.fn(), createDeadline: jest.fn() };
+    const routing = {
+      keyFor: () => 'k',
+      isDown: async () => true,
+      unavailableBody: async () => ({
+        error: { code: 'model_unavailable', message: 'x' },
+        routing: { version: 4 },
+      }),
+    };
+    const controller = new CompletionsController(
+      chatService as unknown as ChatService,
+      {} as unknown as InferenceQueueService,
+      TURNS_OFF,
+      routing as unknown as RoutingService,
+    );
+    const res = mkRes();
+    await controller.chatCompletions(mkReq({ 'x-mera-provider': 'redpill' }), res as never);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.objectContaining({ code: 'model_unavailable' }) }),
+    );
+    expect(chatService.proxyChat).not.toHaveBeenCalled();
   });
 });

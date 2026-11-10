@@ -5,6 +5,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { AuthGuard } from '../auth/auth.guard';
 import { JOB_STORE } from '../inference-jobs/job-store.port';
+import { RoutingService } from '../routing/routing.service';
 import { ChatService } from './chat.service';
 import { ChatTurnService } from './chat-turn.service';
 import { CompletionsController } from './completions.controller';
@@ -101,6 +102,14 @@ function post(port: number): Promise<WireResult> {
   });
 }
 
+const ROUTING_UP = {
+  keyFor: () => 'k',
+  isDown: async () => false,
+  isDownCached: () => false,
+  reportFailure: () => undefined,
+  unavailableBody: async () => ({}),
+};
+
 describe('chatCompletions on the wire (fake NEAR at fetch)', () => {
   let app: INestApplication;
   let port: number;
@@ -119,6 +128,7 @@ describe('chatCompletions on the wire (fake NEAR at fetch)', () => {
       providers: [
         ChatService,
         ChatTurnService,
+        { provide: RoutingService, useValue: ROUTING_UP },
         InferenceQueueService,
         { provide: JOB_STORE, useValue: {} },
       ],

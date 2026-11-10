@@ -1,13 +1,20 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { RoutingService } from '../routing/routing.service';
 import { UPSTREAM_BASE_URL } from '../constants';
-import { ChatService, DeadlineElapsedError } from './chat.service';
+import { ChatService, DeadlineElapsedError, ModelUnavailableError } from './chat.service';
 
 function makeConfig(values: Record<string, unknown>): ConfigService {
   return {
     get: <T>(key: string, fallback?: T): T => (values[key] as T) ?? (fallback as T),
   } as unknown as ConfigService;
 }
+
+const routing = {
+  keyFor: jest.fn(() => 'redpill-key'),
+  isDownCached: jest.fn(() => false),
+  reportFailure: jest.fn(),
+} as unknown as RoutingService;
 
 describe('ChatService', () => {
   const originalFetch = global.fetch;
@@ -25,14 +32,14 @@ describe('ChatService', () => {
   });
 
   it('throws at construction when NEAR_AI_API_KEY is missing', () => {
-    expect(() => new ChatService(makeConfig({}))).toThrow(/NEAR_AI_API_KEY/);
+    expect(() => new ChatService(makeConfig({}), routing)).toThrow(/NEAR_AI_API_KEY/);
   });
 
   it('defaults UPSTREAM_TIMEOUT_MS to 120_000 (tolerates a cold NEAR model)', () => {
     const config = makeConfig({ NEAR_AI_API_KEY: 'k' });
     const getSpy = jest.spyOn(config, 'get');
     // Construction reads UPSTREAM_TIMEOUT_MS with the fallback baked in.
-    new ChatService(config);
+    new ChatService(config, routing);
     expect(getSpy).toHaveBeenCalledWith('UPSTREAM_TIMEOUT_MS', 120_000);
   });
 
@@ -40,7 +47,7 @@ describe('ChatService', () => {
     const upstreamResponse = { status: 200, ok: true } as Response;
     fetchMock.mockResolvedValue(upstreamResponse);
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'secret-key' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'secret-key' }), routing);
     const body = { model: 'm', messages: [] };
     const extraHeaders = { 'X-Encryption-Version': 'v2' };
 
@@ -65,7 +72,7 @@ describe('ChatService', () => {
     });
     fetchMock.mockRejectedValue(abortErr);
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }), routing);
     await expect(svc.proxyChat({})).rejects.toBe(abortErr);
   });
 
@@ -82,7 +89,10 @@ describe('ChatService', () => {
       });
     });
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 50 }));
+    const svc = new ChatService(
+      makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 50 }),
+      routing,
+    );
     const promise = svc.proxyChat({});
     const assertion = expect(promise).rejects.toMatchObject({
       name: 'AbortError',
@@ -95,7 +105,7 @@ describe('ChatService', () => {
   it('rethrows a generic upstream fetch failure', async () => {
     const err = new Error('ECONNREFUSED');
     fetchMock.mockRejectedValue(err);
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }), routing);
     await expect(svc.proxyChat({})).rejects.toBe(err);
   });
 
@@ -105,7 +115,7 @@ describe('ChatService', () => {
 
   it('fails immediately, without an upstream fetch, when the deadline elapsed while queued', async () => {
     const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }), routing);
 
     await expect(
       svc.proxyChat({ model: 'm' }, undefined, {
@@ -126,7 +136,10 @@ describe('ChatService', () => {
       return new Promise<Response>(() => {}); // never settles on its own
     });
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 1_000 }));
+    const svc = new ChatService(
+      makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 1_000 }),
+      routing,
+    );
     // 900ms of the 1000ms budget was already spent waiting for a queue slot.
     void svc.proxyChat({}, undefined, { deadlineAt: Date.now() + 100 }).catch(() => undefined);
 
@@ -138,7 +151,7 @@ describe('ChatService', () => {
 
   it('does not start a fetch when the client signal is already aborted', async () => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation();
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }), routing);
     const aborted = AbortSignal.abort();
 
     await expect(
@@ -163,7 +176,7 @@ describe('ChatService', () => {
       });
     });
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }), routing);
     const external = new AbortController();
     const promise = svc.proxyChat({}, undefined, { signal: external.signal });
     const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
@@ -189,7 +202,10 @@ describe('ChatService', () => {
       });
     });
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 50 }));
+    const svc = new ChatService(
+      makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 50 }),
+      routing,
+    );
     const promise = svc.proxyChat({ model: 'Qwen/Qwen3.6-35B-A3B-FP8' }, undefined, {
       userId: 'user-42',
     });
@@ -215,7 +231,10 @@ describe('ChatService', () => {
       });
     });
 
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 10 }));
+    const svc = new ChatService(
+      makeConfig({ NEAR_AI_API_KEY: 'k', UPSTREAM_TIMEOUT_MS: 10 }),
+      routing,
+    );
     const promise = svc.proxyChat({});
     const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
     jest.advanceTimersByTime(10);
@@ -229,8 +248,77 @@ describe('ChatService', () => {
   it('returns a non-2xx upstream response without throwing (caller handles it)', async () => {
     const upstreamResponse = { status: 500, ok: false } as Response;
     fetchMock.mockResolvedValue(upstreamResponse);
-    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }));
+    const svc = new ChatService(makeConfig({ NEAR_AI_API_KEY: 'k' }), routing);
     const res = await svc.proxyChat({});
     expect(res).toBe(upstreamResponse);
+  });
+
+  describe('providers and routing', () => {
+    const config = { NEAR_AI_API_KEY: 'near-key', REDPILL_API_KEY: 'rp-key' };
+    const upstream = { status: 200, ok: true } as Response;
+
+    it('sends redpill requests to the redpill base URL with the redpill key', async () => {
+      fetchMock.mockResolvedValue(upstream);
+      const svc = new ChatService(makeConfig({ ...config }), {
+        keyFor: () => 'rp-key',
+        isDownCached: () => false,
+        reportFailure: jest.fn(),
+      } as unknown as RoutingService);
+      await svc.proxyChat({ model: 'qwen/qwen3.8-27b' }, undefined, { provider: 'redpill' });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://tee.redpill.ai/v1/chat/completions');
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer rp-key');
+    });
+
+    it('defaults to near with the near key', async () => {
+      fetchMock.mockResolvedValue(upstream);
+      const svc = new ChatService(makeConfig({ ...config }), routing);
+      await svc.proxyChat({ model: 'm' });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`${UPSTREAM_BASE_URL}/chat/completions`);
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer near-key');
+    });
+
+    it('refuses without a fetch when the model is marked down', async () => {
+      const svc = new ChatService(makeConfig({ ...config }), {
+        keyFor: () => 'k',
+        isDownCached: () => true,
+        reportFailure: jest.fn(),
+      } as unknown as RoutingService);
+      await expect(svc.proxyChat({ model: 'm' })).rejects.toBeInstanceOf(ModelUnavailableError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a provider with no key instead of crashing', async () => {
+      const svc = new ChatService(makeConfig({ ...config }), {
+        keyFor: () => '',
+        isDownCached: () => false,
+        reportFailure: jest.fn(),
+      } as unknown as RoutingService);
+      await expect(
+        svc.proxyChat({ model: 'm' }, undefined, { provider: 'redpill' }),
+      ).rejects.toBeInstanceOf(ModelUnavailableError);
+    });
+
+    it('reports a 5xx, a thrown fetch and an empty body as passive failures, not a 4xx', async () => {
+      jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const reportFailure = jest.fn();
+      const svc = new ChatService(makeConfig({ ...config }), {
+        keyFor: () => 'k',
+        isDownCached: () => false,
+        reportFailure,
+      } as unknown as RoutingService);
+      fetchMock.mockResolvedValueOnce({ status: 429, ok: false });
+      await svc.proxyChat({ model: 'm' });
+      expect(reportFailure).not.toHaveBeenCalled();
+      fetchMock.mockResolvedValueOnce({ status: 503, ok: false });
+      await svc.proxyChat({ model: 'm' });
+      expect(reportFailure).toHaveBeenCalledWith('near', 'm');
+      fetchMock.mockRejectedValueOnce(new Error('ECONNRESET'));
+      await expect(svc.proxyChat({ model: 'm' })).rejects.toThrow('ECONNRESET');
+      expect(reportFailure).toHaveBeenCalledTimes(2);
+      svc.reportEmpty('near', { model: 'm' });
+      expect(reportFailure).toHaveBeenCalledTimes(3);
+    });
   });
 });

@@ -760,4 +760,25 @@ describe('AttestationService', () => {
       });
     });
   });
+
+  describe('providers', () => {
+    it('keeps a cache entry per provider and sends redpill to its own base URL and key', async () => {
+      fetchMock.mockResolvedValue(makeUpstream({ status: 200, body: '{"model_attestations":[]}' }));
+      const svc = new AttestationService(
+        makeConfig({ NEAR_AI_API_KEY: 'n-key', REDPILL_API_KEY: 'r-key' }),
+      );
+      await svc.proxyAttestationReport('model=m', 'near');
+      await svc.proxyAttestationReport('model=m', 'redpill');
+      await svc.proxyAttestationReport('model=m', 'redpill');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+      expect(url).toBe('https://tee.redpill.ai/v1/attestation/report?model=m');
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer r-key');
+    });
+
+    it('throws for redpill without a key', async () => {
+      const svc = new AttestationService(makeConfig({ NEAR_AI_API_KEY: 'n' }));
+      await expect(svc.proxyAttestationReport('', 'redpill')).rejects.toThrow(/redpill/);
+    });
+  });
 });

@@ -9,6 +9,7 @@ import { AuthGuard, type AuthenticatedRequest } from '../auth/auth.guard';
 import { JOB_STORE } from '../inference-jobs/job-store.port';
 import { ReadMeterService } from '../inference-jobs/read-meter.service';
 import { RedisJobStore } from '../inference-jobs/redis-job-store';
+import { RoutingService } from '../routing/routing.service';
 import { ChatService } from './chat.service';
 import { ChatTurnService } from './chat-turn.service';
 import { CompletionsController } from './completions.controller';
@@ -112,6 +113,14 @@ const until = async (check: () => Promise<boolean> | boolean, ms = 3_000) => {
   }
 };
 
+const ROUTING_UP = {
+  keyFor: () => 'k',
+  isDown: async () => false,
+  isDownCached: () => false,
+  reportFailure: () => undefined,
+  unavailableBody: async () => ({}),
+};
+
 describe('detached chat turns on the wire', () => {
   const apps: INestApplication[] = [];
   let redis: Redis;
@@ -131,6 +140,7 @@ describe('detached chat turns on the wire', () => {
       providers: [
         ChatService,
         ChatTurnService,
+        { provide: RoutingService, useValue: ROUTING_UP },
         InferenceQueueService,
         { provide: JOB_STORE, useValue: store },
       ],

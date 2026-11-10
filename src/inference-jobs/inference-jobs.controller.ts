@@ -19,6 +19,8 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Readable } from 'stream';
+import { PROVIDER_JOB_KEY } from './provider-key';
+import { parseProvider } from '../constants';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { DailyReadingExceededError, InferenceJobsService } from './inference-jobs.service';
@@ -52,6 +54,7 @@ export class InferenceJobsController {
     @Headers('idempotency-key') idempotencyKey?: string,
     @Headers('x-mera-reading') readingClient?: string,
     @Res({ passthrough: true }) res?: Response,
+    @Headers('x-mera-provider') providerHeader?: string,
   ): Promise<{ requestId: string; capabilityToken: string }> {
     // Capability-token authed callers (phase-2 chain from background) must
     // hold the `jobs:submit-followup` scope. The original submit always
@@ -67,6 +70,16 @@ export class InferenceJobsController {
     // sha256-hashes before using it as a key.
     if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
       throw new BadRequestException('Invalid Idempotency-Key');
+    }
+    const provider = parseProvider(providerHeader);
+    if (!provider) throw new BadRequestException('Unknown X-Mera-Provider');
+    // The job store keeps one string record per job and replays it as upstream
+    // headers, so the provider rides in it; the worker takes it back out.
+    if (provider !== 'near') {
+      dto.e2eeSession = {
+        ...dto.e2eeSession,
+        [PROVIDER_JOB_KEY]: provider,
+      } as typeof dto.e2eeSession;
     }
     let result;
     try {

@@ -1,5 +1,7 @@
 import { Controller, Get, Logger, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { parseProvider } from '../constants';
+import { RoutingService } from '../routing/routing.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { AttestationService } from './attestation.service';
 import { ComposeFileRelay } from './compose-file';
@@ -10,7 +12,10 @@ export class AttestationController {
   private readonly logger = new Logger(AttestationController.name);
   private readonly composeFiles = new ComposeFileRelay();
 
-  constructor(private readonly attestationService: AttestationService) {}
+  constructor(
+    private readonly attestationService: AttestationService,
+    private readonly routing: RoutingService,
+  ) {}
 
   @Get('attestation/compose-file')
   async getComposeFile(
@@ -24,10 +29,20 @@ export class AttestationController {
 
   @Get('attestation/report')
   async getReport(@Req() req: Request, @Res() res: Response) {
+    const provider = parseProvider(req.headers['x-mera-provider']);
+    if (!provider) {
+      res.status(400).json({ error: 'Unknown X-Mera-Provider' });
+      return;
+    }
     const queryString = req.url.split('?')[1] ?? '';
+    const model = new URLSearchParams(queryString).get('model');
+    if (!this.routing.keyFor(provider) || (model && (await this.routing.isDown(provider, model)))) {
+      res.status(503).json(await this.routing.unavailableBody());
+      return;
+    }
     const startedAt = Date.now();
     try {
-      const upstream = await this.attestationService.proxyAttestationReport(queryString);
+      const upstream = await this.attestationService.proxyAttestationReport(queryString, provider);
 
       res.status(upstream.status);
       const contentType = upstream.headers.get('content-type');

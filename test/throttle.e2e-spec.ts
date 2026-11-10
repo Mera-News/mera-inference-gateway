@@ -66,6 +66,8 @@ describe('Rate limiting (e2e)', () => {
     process.env.INFERENCE_JOBS_REDIS_URL = redisUrl;
     for (const key of OWNED_ENV) savedEnv[key] = process.env[key];
     process.env.BULLMQ_PREFIX = prefix;
+    // No e2e test may reach NEAR or RedPill: keep the health probes off.
+    process.env.ROUTING_PROBES_ENABLED = 'false';
     process.env.THROTTLE_TTL = '60';
     process.env.THROTTLE_LIMIT = String(LIMIT);
 

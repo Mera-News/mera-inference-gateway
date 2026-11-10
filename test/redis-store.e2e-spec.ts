@@ -59,6 +59,8 @@ describe('InferenceGateway redis job store (e2e)', () => {
     // Isolate this suite's BullMQ keys from app.e2e-spec.ts runs on the same
     // redis container.
     process.env.BULLMQ_PREFIX = 'bull-e2e';
+    // No e2e test may reach NEAR or RedPill: keep the health probes off.
+    process.env.ROUTING_PROBES_ENABLED = 'false';
 
     // Deferred CJS load — JobStoreModule.register() reads process.env at
     // module-body import time, so AppModule must not be imported statically.

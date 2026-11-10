@@ -49,6 +49,8 @@ describe('InferenceGateway (e2e)', () => {
     // otherwise share buckets and 429 mid-suite, which reads as a flake. A
     // per-run prefix isolates both the throttle keys and the BullMQ queues.
     process.env.BULLMQ_PREFIX = `e2e-${randomBytes(4).toString('hex')}`;
+    // No e2e test may reach NEAR or RedPill: keep the health probes off.
+    process.env.ROUTING_PROBES_ENABLED = 'false';
     // This suite is not testing rate limiting; keep the limit clear of it.
     // The behavioural throttle assertions live in throttle.e2e-spec.ts, which
     // sets a LOW limit on purpose.
@@ -89,5 +91,29 @@ describe('InferenceGateway (e2e)', () => {
       .post('/v1/chat/completions/batch')
       .send({ requests: [{ messages: [{ role: 'user', content: 'hello' }] }] })
       .expect(401);
+  });
+
+  it('GET /v1/routing is open, uncached, and lists every lane', async () => {
+    const res = await request(app.getHttpServer()).get('/v1/routing').expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['x-mera-routing']).toBe(String(res.body.version));
+    expect(Object.keys(res.body.lanes).sort()).toEqual(
+      ['background', 'chat-tools', 'chat-single', 'fact-check', 'scoring', 'topics'].sort(),
+    );
+  });
+
+  it('carries X-Mera-Routing on a gateway-made 401 too', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/v1/chat/completions')
+      .send({})
+      .expect(401);
+    expect(res.headers['x-mera-routing']).toBeDefined();
+  });
+
+  it('POST /v1/routing/admin/pin is a 404 while ROUTING_ADMIN_TOKEN is unset', () => {
+    return request(app.getHttpServer())
+      .post('/v1/routing/admin/pin')
+      .send({ profile: 'near/qwen3.8-27b', state: 'down' })
+      .expect(404);
   });
 });

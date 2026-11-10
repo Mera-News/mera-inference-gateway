@@ -3,6 +3,8 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { ChatService } from '../chat/chat.service';
 import { upstreamErrorMessage } from '../chat/completions.controller';
+import { parseProvider } from '../constants';
+import { PROVIDER_JOB_KEY } from '../inference-jobs/provider-key';
 import { JOB_STORE, type JobResult, type JobStore } from '../inference-jobs/job-store.port';
 import { LLM_INFERENCE_QUEUE } from './queues.constants';
 
@@ -46,12 +48,13 @@ export class LlmInferenceProcessor extends WorkerHost {
     // embed the system inside each request's messages[] unchanged.
     const forwardBody = maybePrependSharedSystem(request.body, sharedSystem);
 
-    const headers: Record<string, string> = e2eeSession ? { ...e2eeSession } : {};
+    const { [PROVIDER_JOB_KEY]: providerValue, ...headers } = e2eeSession ?? {};
+    const provider = parseProvider(providerValue) ?? 'near';
 
     let result: JobResult;
 
     try {
-      const upstream = await this.chat.proxyChat(forwardBody, headers);
+      const upstream = await this.chat.proxyChat(forwardBody, headers, { provider });
       if (!upstream.ok) {
         const body = await upstream.text();
         this.logger.warn(
