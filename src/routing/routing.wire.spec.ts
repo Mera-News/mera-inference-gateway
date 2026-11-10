@@ -7,7 +7,7 @@ import request from 'supertest';
 const RedisMock = require('ioredis-mock');
 import { ProbeProcessor } from './probe.processor';
 import { RoutingModule } from './routing.module';
-import { RoutingService, ROUTING_PROBE_QUEUE } from './routing.service';
+import { RoutingService, ROUTING_PROBE_QUEUE, ROUTING_REDIS } from './routing.service';
 
 // Bull Board is not under test; its feature module needs a real BullMQ queue.
 jest.mock('@bull-board/nestjs', () => ({
@@ -51,7 +51,9 @@ describe('routing over HTTP (real module wiring, Redis mocked)', () => {
       ],
     })
       .overrideProvider(getQueueToken(ROUTING_PROBE_QUEUE))
-      .useValue({ waitUntilReady: async () => redis, add: async () => undefined })
+      .useValue({ waitUntilReady: async () => undefined, add: async () => undefined })
+      .overrideProvider(ROUTING_REDIS)
+      .useValue(redis)
       // No Redis root here, so the real worker cannot start; its logic has its own spec.
       .overrideProvider(ProbeProcessor)
       .useValue({})

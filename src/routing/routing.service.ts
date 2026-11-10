@@ -1,4 +1,10 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
@@ -7,6 +13,7 @@ import { PROVIDERS, type Provider } from '../constants';
 import { LANES, PROFILES, profileFor } from './profiles';
 
 export const ROUTING_PROBE_QUEUE = 'routing-probe';
+export const ROUTING_REDIS = Symbol('ROUTING_REDIS');
 export const PROBE_EVERY_MS = 60_000;
 /** Hysteresis: consecutive failed probes to go down, passing probes to come back. */
 export const FAILS_TO_DOWN = 2;
@@ -37,7 +44,7 @@ interface Health {
 }
 
 @Injectable()
-export class RoutingService implements OnApplicationBootstrap {
+export class RoutingService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(RoutingService.name);
   private readonly prefix: string;
   private snapshotCache: Snapshot | null = null;
@@ -45,6 +52,8 @@ export class RoutingService implements OnApplicationBootstrap {
   constructor(
     private readonly config: ConfigService,
     @InjectQueue(ROUTING_PROBE_QUEUE) private readonly queue: Queue,
+    // The table's own client on the BullMQ Redis (queue.waitUntilReady() resolves void, not a client).
+    @Inject(ROUTING_REDIS) private readonly client: Redis,
   ) {
     // Same default literal as queues.module.ts and throttling.module.ts.
     this.prefix = `${this.config.get<string>('BULLMQ_PREFIX', 'bull')}:routing-table`;
@@ -133,7 +142,7 @@ export class RoutingService implements OnApplicationBootstrap {
    * can overlap a tick, which at worst counts one probe twice.
    */
   async recordProbe(profile: string, ok: boolean): Promise<void> {
-    const redis = await this.redis();
+    const redis = this.client;
     const raw = await redis.hget(this.key('health'), profile);
     const h: Health = raw ? (JSON.parse(raw) as Health) : { state: 'up', fails: 0, passes: 0 };
     const pin = await this.pinOf(redis, profile);
@@ -152,7 +161,7 @@ export class RoutingService implements OnApplicationBootstrap {
   }
 
   async setPin(profile: string, state: Up | 'auto'): Promise<void> {
-    const redis = await this.redis();
+    const redis = this.client;
     const raw = await redis.hget(this.key('health'), profile);
     const health: Up = raw ? (JSON.parse(raw) as Health).state : 'up';
     const before = (await this.pinOf(redis, profile)) ?? health;
@@ -185,7 +194,7 @@ export class RoutingService implements OnApplicationBootstrap {
     const cached = this.snapshotCache;
     if (cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached;
     try {
-      const redis = await this.redis();
+      const redis = this.client;
       const [health, pins, meta] = await Promise.all([
         redis.hgetall(this.key('health')),
         redis.hgetall(this.key('pins')),
@@ -217,9 +226,8 @@ export class RoutingService implements OnApplicationBootstrap {
     return this.snapshotCache;
   }
 
-  /** The routing table lives on the BullMQ Redis (noeviction), reusing the queue's connection. */
-  private async redis(): Promise<Redis> {
-    return (await this.queue.waitUntilReady()) as unknown as Redis;
+  async onModuleDestroy(): Promise<void> {
+    await this.client.quit().catch(() => undefined);
   }
 
   private key(name: 'health' | 'pins' | 'meta'): string {

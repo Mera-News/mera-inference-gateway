@@ -11,7 +11,8 @@ const NEAR_MODEL = 'Qwen/Qwen3.8-27B';
 function setup(env: Record<string, string> = {}) {
   const redis = new RedisMock();
   const queue = {
-    waitUntilReady: jest.fn().mockResolvedValue(redis),
+    // bullmq ^6: resolves void, never a client. The service must not rely on it.
+    waitUntilReady: jest.fn().mockResolvedValue(undefined),
     add: jest.fn().mockResolvedValue(undefined),
     upsertJobScheduler: jest.fn().mockResolvedValue(undefined),
   };
@@ -24,7 +25,7 @@ function setup(env: Record<string, string> = {}) {
   const config = {
     get: (k: string, fb?: unknown) => values[k] ?? fb,
   } as unknown as ConfigService;
-  const svc = new RoutingService(config, queue as unknown as Queue);
+  const svc = new RoutingService(config, queue as unknown as Queue, redis);
   return { svc, queue, redis };
 }
 
@@ -119,8 +120,8 @@ describe('RoutingService', () => {
   });
 
   it('a Redis outage serves every profile up and never throws', async () => {
-    const { svc, queue } = setup();
-    queue.waitUntilReady.mockRejectedValue(new Error('redis down'));
+    const { svc, redis } = setup();
+    jest.spyOn(redis, 'hgetall').mockRejectedValue(new Error('redis down'));
     expect((await svc.body()).lanes['chat-tools'].state).toBe('ok');
     expect(await svc.version()).toBe(0);
   });
