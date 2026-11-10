@@ -725,3 +725,39 @@ describe('provider header and fast-fail', () => {
     expect(chatService.proxyChat).not.toHaveBeenCalled();
   });
 });
+
+describe('E2EE request headers forwarded upstream', () => {
+  it('forwards the RedPill v2 set, and never invents X-Signing-Algo', async () => {
+    const { controller, chatService } = makeControllerAndDeps();
+    chatService.proxyChat.mockRejectedValue(new Error('stop here'));
+    jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+      on: jest.fn(),
+      off: jest.fn(),
+    };
+    const req = {
+      headers: {
+        'x-mera-provider': 'redpill',
+        'x-e2ee-version': '2',
+        'x-e2ee-nonce': 'n'.repeat(64),
+        'x-e2ee-timestamp': '1700000000',
+        'x-client-pub-key': 'c',
+        'x-model-pub-key': 'm',
+      },
+      body: { model: 'm', messages: [] },
+      user: { id: 'u' },
+      on: jest.fn(),
+      off: jest.fn(),
+    };
+    await controller.chatCompletions(req as never, res as never);
+    expect(chatService.proxyChat.mock.calls[0][1]).toEqual({
+      'X-E2EE-Version': '2',
+      'X-E2EE-Nonce': 'n'.repeat(64),
+      'X-E2EE-Timestamp': '1700000000',
+      'X-Client-Pub-Key': 'c',
+      'X-Model-Pub-Key': 'm',
+    });
+  });
+});

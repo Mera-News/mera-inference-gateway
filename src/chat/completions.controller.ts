@@ -27,6 +27,10 @@ const E2EE_REQUEST_HEADERS: Record<string, string> = {
   'x-client-pub-key': 'X-Client-Pub-Key',
   'x-model-pub-key': 'X-Model-Pub-Key',
   'x-encryption-version': 'X-Encryption-Version',
+  // RedPill E2EE v2: nonce and timestamp are per request, so they are never stored or reused.
+  'x-e2ee-version': 'X-E2EE-Version',
+  'x-e2ee-nonce': 'X-E2EE-Nonce',
+  'x-e2ee-timestamp': 'X-E2EE-Timestamp',
 };
 
 /** Response headers that must never be forwarded to the client. */

@@ -185,13 +185,15 @@ describe('AttestationService', () => {
             signing_algo: 'ed25519',
             signing_public_key: 'a'.repeat(64),
             request_nonce: 'n'.repeat(64),
+            // The app verifies this quote on the hot path; nvidia_payload and app_compose stay out.
+            intel_quote: 'Q'.repeat(10_000),
           },
         ]);
         expect(body.gateway_attestation).toEqual({
           signing_address: 'gw-addr',
           signing_algo: 'ed25519',
         });
-        expect(text.length).toBeLessThan(600);
+        expect(text.length).toBeLessThan(11_000);
         expect(fullReport.length).toBeGreaterThan(150_000);
       });
 
@@ -226,7 +228,7 @@ describe('AttestationService', () => {
         const second = await svc.proxyAttestationReport('model=x');
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        expect((await second.text()).length).toBeLessThan(600);
+        expect((await second.text()).length).toBeLessThan(11_000);
       });
 
       it('leaves a body it does not recognise alone', () => {
@@ -758,6 +760,40 @@ describe('AttestationService', () => {
           expect(logged()).not.toContain('body-echo');
         });
       });
+    });
+  });
+
+  describe('hot-path projection and the quote', () => {
+    it('keeps intel_quote on each model attestation (the app verifies it on the hot path)', () => {
+      const body = JSON.stringify({
+        model_attestations: [
+          {
+            model_name: 'm',
+            signing_public_key: 'k',
+            intel_quote: 'QUOTE',
+            nvidia_payload: 'BIG',
+            info: { app_compose: 'BIG' },
+          },
+        ],
+      });
+      const slim = JSON.parse(slimAttestationForHotPath(body));
+      expect(slim.model_attestations[0]).toEqual({
+        model_name: 'm',
+        signing_public_key: 'k',
+        intel_quote: 'QUOTE',
+      });
+    });
+
+    it("passes RedPill's aci/1 report (no model_attestations) through verbatim", () => {
+      const report = JSON.stringify({
+        api_version: 'aci/1',
+        attestation: { tee_type: 'tdx', evidence: { quote: 'Q' } },
+        signing_public_key: '04ab',
+        signing_algo: 'ecdsa',
+        intel_quote: 'Q',
+        all_attestations: [{ signing_public_key: '04ab' }],
+      });
+      expect(slimAttestationForHotPath(report)).toBe(report);
     });
   });
 

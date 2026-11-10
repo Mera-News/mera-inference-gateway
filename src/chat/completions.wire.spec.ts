@@ -37,6 +37,14 @@ const UPSTREAM_HEADERS = {
   'x-request-id': 'near-req-1',
 };
 
+/** RedPill's E2EE v2 echo and receipt id: relayed to the app on every relayed body. */
+const REDPILL_HEADERS = {
+  'x-e2ee-applied': 'true',
+  'x-e2ee-version': '2',
+  'x-e2ee-algo': 'secp256k1-aes-256-gcm-hkdf-sha256',
+  'x-receipt-id': 'rcpt-1',
+};
+
 const enc = new TextEncoder();
 
 function upstreamResponse(
@@ -228,6 +236,21 @@ describe('chatCompletions on the wire (fake NEAR at fetch)', () => {
     });
     expectNoUpstreamHeaders(res);
   });
+
+  it.each(['text/event-stream', 'application/json'])(
+    'relays RedPill x-e2ee-* and x-receipt-id on a %s reply',
+    async (type) => {
+      const body = type === 'application/json' ? '{"choices":[{}]}' : 'data: {"a":1}\n\n';
+      fetchSpy.mockResolvedValue(
+        new Response(body, { status: 200, headers: { 'content-type': type, ...REDPILL_HEADERS } }),
+      );
+      const res = await post(port);
+      expect(res).toMatchObject({ kind: 'response', status: 200 });
+      const { headers } = res as { headers: http.IncomingHttpHeaders };
+      for (const [name, value] of Object.entries(REDPILL_HEADERS))
+        expect(headers[name]).toBe(value);
+    },
+  );
 
   it('a normal SSE stream passes byte-identical, with upstream headers and no blocked ones', async () => {
     const frames = [

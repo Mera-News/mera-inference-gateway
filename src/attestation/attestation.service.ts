@@ -47,6 +47,8 @@ const HOT_PATH_ATTESTATION_FIELDS = [
   'signing_algo',
   'signing_public_key',
   'request_nonce',
+  // The app verifies the quote on the hot path, fail-closed; without it every key is rejected.
+  'intel_quote',
 ] as const;
 
 function pickFields(entry: unknown): Record<string, unknown> | null {
@@ -80,6 +82,8 @@ export function slimAttestationForHotPath(body: string): string {
       .filter((e): e is Record<string, unknown> => e !== null),
   };
   const gateway = pickFields(report.gateway_attestation);
+  // Only the model's quote is verified; the gateway entry stays slim.
+  if (gateway) delete gateway.intel_quote;
   if (gateway) slim.gateway_attestation = gateway;
   return JSON.stringify(slim);
 }
