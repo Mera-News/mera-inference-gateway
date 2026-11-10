@@ -21,14 +21,14 @@ const BULK = [
   'redpill/qwen3.8-27b',
   'redpill/gemma-4-31b',
 ];
-/** Kimi K2.6 qualified for chat and topics only (below the Qwen bar on scoring, untested on fact-check and background). */
+/** Kimi K2.6 qualified for chat and topics only (below the Qwen bar on scoring, untested on background). */
 const KIMI = 'redpill/kimi-k2.6';
 
-/** Default ranking per lane. Mirrors the app's built-in fallback table. */
+/** Default ranking per lane. Mirrors the app's built-in fallback table. No fact-check lane: the quick
+ *  fact check rides chat-single; a build that still asks for it falls back to its own table. */
 export const LANES: Record<string, string[]> = {
   'chat-tools': [...CHAT, KIMI],
   'chat-single': [...CHAT, KIMI],
-  'fact-check': CHAT,
   scoring: BULK,
   topics: [...BULK, KIMI],
   background: BULK,
