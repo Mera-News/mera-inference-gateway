@@ -130,9 +130,10 @@ export class RoutingService implements OnApplicationBootstrap, OnModuleDestroy {
   reportFailure(provider: Provider, model: string): void {
     const profile = profileFor(provider, model);
     if (!profile) return;
-    // The fixed jobId collapses a burst of failures into one queued probe.
+    // The fixed jobId collapses a burst of failures into one queued probe. No ':' in it:
+    // BullMQ throws "Custom Id cannot contain :" and the probe is never queued.
     this.queue
-      .add('probe', { profile }, { jobId: `suspect:${profile}`, ...this.probeJobOpts() })
+      .add('probe', { profile }, { jobId: `suspect-${profile}`, ...this.probeJobOpts() })
       .catch((err: Error) => this.logger.error(`suspect probe not queued: ${err.message}`));
   }
 

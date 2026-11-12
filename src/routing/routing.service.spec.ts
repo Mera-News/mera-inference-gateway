@@ -141,8 +141,11 @@ describe('RoutingService', () => {
     expect(queue.add).toHaveBeenCalledWith(
       'probe',
       { profile: NEAR },
-      expect.objectContaining({ jobId: `suspect:${NEAR}` }),
+      expect.objectContaining({ jobId: `suspect-${NEAR}` }),
     );
+    // BullMQ rejects a custom id with a ':' unless it splits into exactly 3 parts.
+    const { jobId } = queue.add.mock.calls[0][2] as { jobId: string };
+    expect(jobId).not.toContain(':');
   });
 
   it('schedules a 60s probe per profile at boot, unless probes are disabled', async () => {
