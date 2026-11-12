@@ -98,7 +98,7 @@ describe('InferenceGateway (e2e)', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['x-mera-routing']).toBe(String(res.body.version));
     expect(Object.keys(res.body.lanes).sort()).toEqual(
-      ['background', 'chat-tools', 'chat-single', 'fact-check', 'scoring', 'topics'].sort(),
+      ['background', 'chat-tools', 'chat-single', 'scoring', 'topics'].sort(),
     );
   });
 
