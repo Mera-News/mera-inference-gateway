@@ -56,10 +56,15 @@ export class WebSearchController {
       // Length rejections (400) are the caller's problem and pass through
       // verbatim; anything else is an upstream/config failure.
       if (error instanceof HttpException) throw error;
-      this.logger.error(
-        `Web search failed: ${error instanceof Error ? error.message : String(error)}`,
-        error instanceof Error ? error.stack : undefined,
-      );
+      // A JSON parse error quotes the body it failed on, and Brave's body echoes the query.
+      if ((error as { name?: unknown })?.name === 'SyntaxError') {
+        this.logger.error('Web search failed: Brave body is not valid JSON');
+      } else {
+        this.logger.error(
+          `Web search failed: ${error instanceof Error ? error.message : String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
       throw new BadGatewayException('Web search failed');
     }
   }

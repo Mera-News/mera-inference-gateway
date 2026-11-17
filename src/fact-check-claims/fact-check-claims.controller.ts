@@ -51,10 +51,15 @@ export class FactCheckClaimsController {
       // HttpExceptions and pass through verbatim — flattening a 503 into a 502
       // here would erase the one distinction the caller branches on.
       if (error instanceof HttpException) throw error;
-      this.logger.error(
-        `Fact check claims lookup failed: ${error instanceof Error ? error.message : String(error)}`,
-        error instanceof Error ? error.stack : undefined,
-      );
+      // A JSON parse error quotes the body it failed on, which can carry the claim text.
+      if ((error as { name?: unknown })?.name === 'SyntaxError') {
+        this.logger.error('Fact check claims lookup failed: response body is not valid JSON');
+      } else {
+        this.logger.error(
+          `Fact check claims lookup failed: ${error instanceof Error ? error.message : String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
       throw new BadGatewayException('Fact check claims lookup failed');
     }
   }

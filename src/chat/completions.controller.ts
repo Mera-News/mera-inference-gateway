@@ -450,10 +450,17 @@ export class CompletionsController {
               );
               return { index, error: `Request failed (${error.message})` };
             }
-            this.logger.error(
-              `Batch[${index}] failed user=${userId ?? 'unknown'}`,
-              error instanceof Error ? error.stack : error,
-            );
+            // A JSON parse error quotes the body it failed on, so it is logged by name only.
+            if ((error as { name?: unknown })?.name === 'SyntaxError') {
+              this.logger.error(
+                `Batch[${index}] failed user=${userId ?? 'unknown'} provider=${provider}: upstream body is not valid JSON`,
+              );
+            } else {
+              this.logger.error(
+                `Batch[${index}] failed user=${userId ?? 'unknown'}`,
+                error instanceof Error ? error.stack : error,
+              );
+            }
             return { index, error: 'Request failed' };
           }
         });

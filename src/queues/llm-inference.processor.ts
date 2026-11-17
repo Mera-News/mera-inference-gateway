@@ -78,7 +78,14 @@ export class LlmInferenceProcessor extends WorkerHost {
         result = { id: request.id, ok: true, response: json, error: null };
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      // A JSON parse error quotes the body it failed on: log and store a fixed text instead.
+      // By name, not instanceof: the error can come from fetch's own realm.
+      const msg =
+        (err as { name?: unknown })?.name === 'SyntaxError'
+          ? 'upstream body is not valid JSON'
+          : err instanceof Error
+            ? err.message
+            : String(err);
       this.logger.error(
         `jobId=${jobId} requestIndex=${requestIndex} id=${request.id} failed: ${msg}`,
       );
