@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ExceptionFilter,
   Catch,
   ArgumentsHost,
@@ -107,5 +108,14 @@ function isBodyParseError(exception: unknown): boolean {
   const e = exception as { type?: unknown; body?: unknown; cause?: unknown };
   if (e.type === 'entity.parse.failed') return true;
   if (exception instanceof SyntaxError && 'body' in e) return true;
+  // Nest's Express adapter re-throws the parser's SyntaxError as a bare
+  // BadRequestException(error.message): no `type`, no `cause`, only V8's JSON message.
+  if (
+    exception instanceof BadRequestException &&
+    e.cause === undefined &&
+    /\bJSON\b/.test(exception.message)
+  ) {
+    return true;
+  }
   return e.cause !== undefined && e.cause !== exception && isBodyParseError(e.cause);
 }
