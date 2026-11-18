@@ -33,11 +33,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
       this.logger.warn(
         {
           statusCode: 400,
-          path: request.url,
+          path: request.path,
           method: request.method,
           error: 'request body is not valid JSON',
         },
-        `HTTP 400 ${request.method} ${request.url}`,
+        `HTTP 400 ${request.method} ${request.path}`,
       );
       response.status(400).json({
         statusCode: 400,
@@ -70,15 +70,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
       }
     }
 
+    // Nest's own 404 text quotes the full URL, query string included.
+    const noQuery = (text?: string) => text?.split(request.url).join(request.path);
     const logPayload = {
       statusCode: status,
-      path: request.url,
+      path: request.path,
       method: request.method,
       ...(exception instanceof Error
-        ? { error: exception.message, stack: exception.stack }
-        : { error: String(exception) }),
+        ? { error: noQuery(exception.message), stack: noQuery(exception.stack) }
+        : { error: noQuery(String(exception)) }),
     };
-    const logMessage = `HTTP ${status} ${request.method} ${request.url}`;
+    const logMessage = `HTTP ${status} ${request.method} ${request.path}`;
     if (status < 500) {
       this.logger.warn(logPayload, logMessage);
     } else {

@@ -3,19 +3,22 @@ import {
   ExecutionContext,
   Injectable,
   Logger,
+  OnModuleDestroy,
   OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
-import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from 'jose';
-import type { JWTPayload, JWTVerifyGetKey } from 'jose';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { jwtVerify, errors as joseErrors } from 'jose';
+import type { JWTPayload } from 'jose';
 import { JWT_ISSUER } from '../constants';
 import {
   CAPABILITY_TOKEN_PREFIX,
   CapabilityClaims,
   CapabilityTokenService,
 } from './capability-token.service';
+import { JwksProvider } from './jwks.provider';
 import { parseTier, type Tier } from './tier';
 
 export interface AuthenticatedUser {
@@ -40,30 +43,32 @@ interface MeraJwtPayload extends JWTPayload {
 }
 
 @Injectable()
-export class AuthGuard implements CanActivate, OnModuleInit {
+export class AuthGuard implements CanActivate, OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('AuthGuard');
-  private jwks!: JWTVerifyGetKey;
+  /** Ends the background key-set check on shutdown, so no retry outlives the app. */
+  private readonly shutdown = new AbortController();
   private jwtIssuer!: string;
 
   constructor(
     private configService: ConfigService,
     private capabilityTokens: CapabilityTokenService,
+    private jwks: JwksProvider,
   ) {}
 
   onModuleInit() {
-    const authJwksUrl = this.configService.get<string>('AUTH_JWKS_URL', '');
-    if (!authJwksUrl) {
-      throw new Error('AUTH_JWKS_URL environment variable is not set');
+    // Forks running their own auth service override the expected issuer via
+    // AUTH_JWT_ISSUER; defaults to the Mera auth service's issuer claim. An
+    // empty value would reject every token, so refuse to boot with one.
+    this.jwtIssuer = this.configService.get<string>('AUTH_JWT_ISSUER', JWT_ISSUER);
+    if (!this.jwtIssuer) {
+      throw new Error('AUTH_JWT_ISSUER is set but empty; unset it or give it a value');
     }
 
-    // Forks running their own auth service override the expected issuer via
-    // AUTH_JWT_ISSUER; defaults to the Mera auth service's issuer claim.
-    this.jwtIssuer = this.configService.get<string>('AUTH_JWT_ISSUER', JWT_ISSUER);
+    void this.verifyJwksReachability(this.jwks.url, this.jwks.url.href);
+  }
 
-    const jwksUrl = new URL(authJwksUrl);
-    this.jwks = createRemoteJWKSet(jwksUrl);
-
-    void this.verifyJwksReachability(jwksUrl, authJwksUrl);
+  onModuleDestroy() {
+    this.shutdown.abort();
   }
 
   private async verifyJwksReachability(jwksUrl: URL, authJwksUrl: string): Promise<void> {
@@ -71,9 +76,9 @@ export class AuthGuard implements CanActivate, OnModuleInit {
     const start = Date.now();
     let delayMs = 1000;
 
-    while (true) {
+    while (!this.shutdown.signal.aborted) {
       try {
-        const res = await fetch(jwksUrl);
+        const res = await fetch(jwksUrl, { signal: this.shutdown.signal });
         if (!res.ok) throw new Error(`JWKS endpoint returned ${res.status}`);
         this.logger.log(`JWKS endpoint verified: ${authJwksUrl}`);
         return;
@@ -86,7 +91,11 @@ export class AuthGuard implements CanActivate, OnModuleInit {
           return;
         }
         this.logger.warn(`JWKS endpoint unreachable, retrying in ${delayMs / 1000}s...`);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        try {
+          await sleep(delayMs, undefined, { signal: this.shutdown.signal });
+        } catch {
+          return;
+        }
         delayMs = Math.min(delayMs * 2, 30000);
       }
     }
@@ -121,8 +130,9 @@ export class AuthGuard implements CanActivate, OnModuleInit {
     }
 
     try {
-      const { payload } = await jwtVerify(token, this.jwks, {
+      const { payload } = await jwtVerify(token, this.jwks.keys, {
         issuer: this.jwtIssuer,
+        algorithms: ['EdDSA'],
       });
 
       const jwtPayload = payload as MeraJwtPayload;

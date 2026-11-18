@@ -1,6 +1,6 @@
 import { Logger, type OnApplicationShutdown } from '@nestjs/common';
 import type { Redis } from 'ioredis';
-import type { ThrottlerStorage } from '@nestjs/throttler';
+import { ThrottlerStorageService, type ThrottlerStorage } from '@nestjs/throttler';
 
 /** `ThrottlerStorageRecord` is not re-exported from the package index, so
  *  derive it from the one interface that is. Stays correct across upgrades. */
@@ -29,9 +29,11 @@ interface RedisWithThrottleIncr extends Redis {
  * is behaviourally identical. If anyone ever sets blockDuration, THIS ADAPTER
  * WILL SILENTLY IGNORE IT and they must implement a separate block key here.
  *
- * ── FAILS OPEN ─────────────────────────────────────────────────────────────
- * If Redis is unreachable OR SLOW, requests are allowed rather than rejected.
- * The slow case is the one that matters under a burst, so the client is
+ * ── FALLS BACK TO MEMORY ───────────────────────────────────────────────────
+ * If Redis is unreachable OR SLOW, the stock in-memory storage counts the hit
+ * instead, so limits hold per instance rather than vanishing. Every call tries
+ * Redis first, so the shared counters resume as soon as Redis answers. The
+ * slow case is the one that matters under a burst, so the client is
  * configured with a commandTimeout and no offline queue (see throttling.
  * module.ts); a try/catch alone would let every request stall behind Redis.
  */
@@ -40,6 +42,7 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShu
   /** Health of the Redis dependency. Logged on TRANSITION in both directions:
    *  a one-shot latch would tell us it broke and never that it recovered. */
   private degraded = false;
+  private readonly fallback = new ThrottlerStorageService();
 
   constructor(
     private readonly redis: Redis,
@@ -94,17 +97,12 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShu
       };
     } catch (error) {
       this.markDegraded(error);
-      // Fail OPEN: allow the request.
-      return {
-        totalHits: 0,
-        timeToExpire: Math.ceil(ttlMs / 1000),
-        isBlocked: false,
-        timeToBlockExpire: 0,
-      };
+      return this.fallback.increment(key, ttlMs, limitValue, ttlMs, 'default');
     }
   }
 
   async onApplicationShutdown(): Promise<void> {
+    this.fallback.onApplicationShutdown();
     try {
       await this.redis.quit();
     } catch {
@@ -116,7 +114,7 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShu
     if (this.degraded) return;
     this.degraded = true;
     this.logger.warn(
-      `Throttle store unreachable, failing OPEN (rate limits not enforced): ${
+      `Throttle store unreachable, counting in memory per instance: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -125,6 +123,6 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShu
   private markHealthy(): void {
     if (!this.degraded) return;
     this.degraded = false;
-    this.logger.log('Throttle store recovered, rate limits enforced again');
+    this.logger.log('Throttle store recovered, counting in Redis again');
   }
 }

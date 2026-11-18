@@ -100,7 +100,7 @@ jest.mock('./filters/http-exception.filter', () => ({
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeFakeApp() {
-  const fakeLogger = { log: jest.fn() };
+  const fakeLogger = { log: jest.fn(), warn: jest.fn() };
   const fakeConfigService = {
     get: jest.fn((key: string, fallback?: unknown) => {
       if (key in configVals) return configVals[key];
@@ -133,6 +133,9 @@ function makeFakeApp() {
   };
   return app;
 }
+
+/** Long enough for the admin board to be mounted. */
+const LONG_PASSWORD = 'p'.repeat(32);
 
 /** Re-run bootstrap() by resetting module registry and re-importing main. */
 
@@ -172,7 +175,7 @@ describe('main.ts bootstrap()', () => {
     beforeEach(async () => {
       configVals = {
         BULLBOARD_ADMIN_USERNAME: 'u',
-        BULLBOARD_ADMIN_PASSWORD: 'p',
+        BULLBOARD_ADMIN_PASSWORD: LONG_PASSWORD,
         PORT: 8080,
       };
       await runBootstrap();
@@ -185,7 +188,9 @@ describe('main.ts bootstrap()', () => {
 
     it('calls basicAuth with correct users object', () => {
       // Find the basicAuth call that set up user credentials.
-      expect(basicAuthMock).toHaveBeenCalledWith(expect.objectContaining({ users: { u: 'p' } }));
+      expect(basicAuthMock).toHaveBeenCalledWith(
+        expect.objectContaining({ users: { u: LONG_PASSWORD } }),
+      );
     });
 
     it('app.listen is called with port 8080', () => {
@@ -220,6 +225,37 @@ describe('main.ts bootstrap()', () => {
 
       expect(res.status).toHaveBeenCalledWith(503);
       expect(res.send).toHaveBeenCalledWith('Bull Board disabled');
+    });
+
+    it('warns that the board is off', () => {
+      expect(fakeApp._logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Queue admin board is off'),
+      );
+    });
+  });
+
+  // A short password is as good as none: the route answers 503 and the log says why.
+  describe('when the Bull Board password is shorter than 32 characters', () => {
+    beforeEach(async () => {
+      configVals = {
+        BULLBOARD_ADMIN_USERNAME: 'u',
+        BULLBOARD_ADMIN_PASSWORD: 'p'.repeat(31),
+        PORT: 8080,
+      };
+      await runBootstrap();
+    });
+
+    it('does not mount basic auth, answers 503 and warns without the password', () => {
+      expect(basicAuthMock).not.toHaveBeenCalled();
+      const queuesCall = fakeApp.use.mock.calls.find((args) => args[0] === '/queues');
+      const handler = queuesCall![1] as (req: unknown, res: unknown) => void;
+      const res = { status: jest.fn().mockReturnThis(), send: jest.fn() };
+      handler({}, res);
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(fakeApp._logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('shorter than 32 characters'),
+      );
+      expect(JSON.stringify(fakeApp._logger.warn.mock.calls)).not.toContain('p'.repeat(31));
     });
   });
 
@@ -263,7 +299,7 @@ describe('main.ts bootstrap()', () => {
     beforeEach(async () => {
       configVals = {
         BULLBOARD_ADMIN_USERNAME: 'admin',
-        BULLBOARD_ADMIN_PASSWORD: 'secret',
+        BULLBOARD_ADMIN_PASSWORD: LONG_PASSWORD,
       };
       await runBootstrap();
     });

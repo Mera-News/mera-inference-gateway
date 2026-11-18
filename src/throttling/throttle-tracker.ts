@@ -7,26 +7,23 @@
 // a single bucket. Buckets are keyed by the authenticated principal instead.
 //
 // ──────────────────────────────────────────────────────────────────────────
-// SECURITY: THE JWT DECODE BELOW IS NOT A VERIFICATION AND GRANTS NOTHING.
+// SECURITY: THE SIGNATURE CHECK BELOW SELECTS A COUNTER AND GRANTS NOTHING.
 //
 // ThrottlerGuard is a global APP_GUARD; AuthGuard is controller-scoped, and
 // Nest runs global guards first. So `request.user` does not exist yet when a
-// bucket has to be chosen. For JWTs we therefore read the `sub` claim WITHOUT
-// checking the signature. That is safe because it decides one thing only:
-// which counter to increment. The request is still fully verified by AuthGuard
-// immediately afterwards, and a forged token gets a 401 exactly as before.
-// Nothing here is ever written to `request.user` or read by any handler.
+// bucket has to be chosen. For JWTs the tracker verifies the SIGNATURE only
+// (same key set as AuthGuard, expiry and claims ignored) and reads `sub` from
+// a token that passed. A token that fails, or carries no subject, lands in the
+// IP bucket, so a forged token naming someone else's `sub` cannot spend that
+// user's bucket. An expired but genuine token keeps its own bucket. Nothing
+// here is ever written to `request.user` or read by any handler.
 //
-// Capability tokens do NOT take that shortcut: CapabilityTokenService.verify()
-// is a local HMAC-SHA256 with no network call, so it is cheap enough to run
-// for real. /results polling is the dominant burst traffic and is capability
-// authed, which keeps the unverified path off the high-volume routes.
-//
-// Residual, accepted: on the JWT routes an attacker who knows a victim's
-// userId can aim requests at that victim's bucket and burn it one 401 at a
-// time. Closing that needs a verify shared with AuthGuard; see the wave plan.
+// Capability tokens are verified for real: CapabilityTokenService.verify() is
+// a local HMAC-SHA256 with no network call. /results polling is the dominant
+// burst traffic and is capability authed.
 // ──────────────────────────────────────────────────────────────────────────
 
+import { compactVerify, type CompactVerifyGetKey } from 'jose';
 import type { CapabilityTokenService } from '../auth/capability-token.service';
 import { CAPABILITY_TOKEN_PREFIX } from '../auth/capability-token.service';
 
@@ -47,22 +44,13 @@ function bearerToken(req: { headers?: Record<string, unknown> }): string | null 
   return token;
 }
 
-/**
- * Read `sub` (or the legacy `userId`) out of a JWT WITHOUT verifying it.
- * Bucketing only — see the header note. Returns null on anything unexpected.
- */
-export function decodeJwtSubjectUnverified(token: string): string | null {
+async function verifiedSubject(token: string, keys: CompactVerifyGetKey): Promise<string | null> {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = parts[1];
-    if (!payload) return null;
-    const pad = payload.length % 4 === 0 ? '' : '='.repeat(4 - (payload.length % 4));
-    const json = Buffer.from(
-      payload.replace(/-/g, '+').replace(/_/g, '/') + pad,
-      'base64',
-    ).toString('utf8');
-    const claims = JSON.parse(json) as { sub?: unknown; userId?: unknown };
+    const { payload } = await compactVerify(token, keys, { algorithms: ['EdDSA'] });
+    const claims = JSON.parse(new TextDecoder().decode(payload)) as {
+      sub?: unknown;
+      userId?: unknown;
+    };
     const id = typeof claims.sub === 'string' ? claims.sub : claims.userId;
     return typeof id === 'string' && id.length > 0 ? id : null;
   } catch {
@@ -72,7 +60,7 @@ export function decodeJwtSubjectUnverified(token: string): string | null {
 
 /**
  * Build the throttler's `getTracker`. Returns `u:<id>` when the bearer token
- * yields a principal, `ip:<addr>` otherwise.
+ * has a valid signature or is a valid capability token, `ip:<addr>` otherwise.
  *
  * An EXPIRED capability token yields no principal (verify() rejects on `exp`)
  * and so falls back to the IP bucket. Those requests 401 at AuthGuard anyway,
@@ -81,8 +69,9 @@ export function decodeJwtSubjectUnverified(token: string): string | null {
  */
 export function createThrottleTracker(
   capabilityTokens: Pick<CapabilityTokenService, 'verify'>,
-): (req: Record<string, unknown>) => string {
-  return (req: Record<string, unknown>): string => {
+  keys: CompactVerifyGetKey,
+): (req: Record<string, unknown>) => Promise<string> {
+  return async (req: Record<string, unknown>): Promise<string> => {
     const request = req as { headers?: Record<string, unknown>; ip?: unknown };
     const token = bearerToken(request);
 
@@ -92,7 +81,7 @@ export function createThrottleTracker(
         const claims = capabilityTokens.verify(token);
         if (claims?.uid) return `${USER_BUCKET_PREFIX}${claims.uid}`;
       } else {
-        const subject = decodeJwtSubjectUnverified(token);
+        const subject = await verifiedSubject(token, keys);
         if (subject) return `${USER_BUCKET_PREFIX}${subject}`;
       }
     }

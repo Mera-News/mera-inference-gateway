@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { JWT_ISSUER } from '../constants';
 import { AuthGuard } from './auth.guard';
+import { JwksProvider } from './jwks.provider';
 import {
   CAPABILITY_TOKEN_PREFIX,
   CapabilityClaims,
@@ -41,6 +42,7 @@ describe('AuthGuard', () => {
   let guard: AuthGuard;
   let capabilityTokens: { verify: jest.Mock };
   let configValues: Record<string, string>;
+  let realFetch: typeof global.fetch;
 
   beforeEach(async () => {
     mockJwtVerify.mockReset();
@@ -60,29 +62,46 @@ describe('AuthGuard', () => {
           },
         },
         { provide: CapabilityTokenService, useValue: capabilityTokens },
+        {
+          provide: JwksProvider,
+          useValue: { url: new URL(configValues.AUTH_JWKS_URL), keys: 'jwks-sentinel' },
+        },
       ],
     }).compile();
 
     guard = module.get(AuthGuard);
-    // onModuleInit sets up the jwks + issuer. We don't await the background
-    // reachability probe (fire-and-forget inside the guard).
+    // onModuleInit sets up the issuer and starts the background reachability
+    // probe. Keep that probe off the network: its fetch never settles.
+    realFetch = global.fetch;
+    global.fetch = jest.fn(() => new Promise(() => undefined)) as unknown as typeof global.fetch;
     guard.onModuleInit();
   });
 
-  it('throws if AUTH_JWKS_URL is not set', async () => {
-    delete configValues.AUTH_JWKS_URL;
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        AuthGuard,
-        {
-          provide: ConfigService,
-          useValue: { get: <T>(_k: string, fb?: T): T => fb as T },
-        },
-        { provide: CapabilityTokenService, useValue: capabilityTokens },
-      ],
-    }).compile();
-    const g = module.get(AuthGuard);
-    expect(() => g.onModuleInit()).toThrow(/AUTH_JWKS_URL/);
+  afterEach(() => {
+    guard.onModuleDestroy();
+    global.fetch = realFetch;
+  });
+
+  describe('JwksProvider', () => {
+    const provider = (values: Record<string, string>) =>
+      new JwksProvider({
+        get: <T>(key: string, fb?: T): T => (values[key] as unknown as T) ?? (fb as T),
+      } as unknown as ConfigService);
+
+    it('throws at construction if AUTH_JWKS_URL is not set', () => {
+      expect(() => provider({})).toThrow(/AUTH_JWKS_URL/);
+    });
+
+    it('exposes the parsed url and the key set', () => {
+      const p = provider({ AUTH_JWKS_URL: 'https://auth.example.com/jwks' });
+      expect(p.url.href).toBe('https://auth.example.com/jwks');
+      expect(p.keys).toBe('jwks-sentinel');
+    });
+  });
+
+  it('refuses to boot when AUTH_JWT_ISSUER is set but empty', () => {
+    configValues.AUTH_JWT_ISSUER = '';
+    expect(() => guard.onModuleInit()).toThrow(/AUTH_JWT_ISSUER/);
   });
 
   describe('bearer extraction', () => {
@@ -111,6 +130,7 @@ describe('AuthGuard', () => {
 
       expect(mockJwtVerify).toHaveBeenCalledWith('good.jwt.token', 'jwks-sentinel', {
         issuer: JWT_ISSUER,
+        algorithms: ['EdDSA'],
       });
       expect(getRequest(ctx).user).toEqual({
         id: 'user-42',
@@ -169,6 +189,7 @@ describe('AuthGuard', () => {
       await guard.canActivate(makeContext('Bearer t'));
       expect(mockJwtVerify).toHaveBeenCalledWith('t', 'jwks-sentinel', {
         issuer: 'fork-issuer',
+        algorithms: ['EdDSA'],
       });
     });
 
@@ -256,6 +277,34 @@ describe('AuthGuard', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
       const logCall = logSpy.mock.calls[0][0] as string;
       expect(logCall).toMatch(/verified/i);
+    });
+
+    it('passes its abort signal to fetch', async () => {
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+      await guard['verifyJwksReachability'](
+        new URL('https://issuer.test/jwks.json'),
+        'https://issuer.test/jwks.json',
+      );
+      expect(mockFetch.mock.calls[0][1]).toEqual({ signal: expect.any(AbortSignal) });
+    });
+
+    it('stops retrying on onModuleDestroy, without waiting out the backoff', async () => {
+      mockFetch.mockRejectedValue(new Error('connection refused'));
+
+      const promise = guard['verifyJwksReachability'](
+        new URL('https://issuer.test/jwks.json'),
+        'https://issuer.test/jwks.json',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      guard.onModuleDestroy();
+      // No timer is advanced: only the abort can end the loop.
+      await promise;
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
     });
 
     it('logs "giving up" and resolves when elapsed time exceeds the maximum', async () => {

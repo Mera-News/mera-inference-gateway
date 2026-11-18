@@ -42,13 +42,12 @@ async function bootstrap() {
 
   app.use(helmet());
 
-  // Protect the Bull Board admin UI with HTTP basic auth. The route itself is
-  // registered by BullBoardModule in app.module.ts; this middleware runs
-  // ahead of it. Credentials come from Secret Manager (shared with the
-  // mera-bull-board service).
+  // The Bull Board admin UI sits behind HTTP basic auth, and only when the
+  // password is long enough to survive unlimited guessing. Otherwise the whole
+  // route answers 503, even with the right credentials.
   const bullBoardUser = configService.get<string>('BULLBOARD_ADMIN_USERNAME', '');
   const bullBoardPass = configService.get<string>('BULLBOARD_ADMIN_PASSWORD', '');
-  if (bullBoardUser && bullBoardPass) {
+  if (bullBoardUser && bullBoardPass.length >= 32) {
     app.use(
       '/queues',
       basicAuth({
@@ -58,8 +57,9 @@ async function bootstrap() {
       }),
     );
   } else {
-    // Refuse the route entirely if creds aren't configured. Fail-closed: we
-    // never want bull-board exposed unauthenticated.
+    logger.warn(
+      `Queue admin board is off: ${bullBoardUser && bullBoardPass ? 'BULLBOARD_ADMIN_PASSWORD is shorter than 32 characters' : 'BULLBOARD_ADMIN_USERNAME or BULLBOARD_ADMIN_PASSWORD is unset'}`,
+    );
     app.use('/queues', (_req: Request, res: Response) =>
       res.status(503).send('Bull Board disabled'),
     );

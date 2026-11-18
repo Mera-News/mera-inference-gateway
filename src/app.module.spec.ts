@@ -280,8 +280,14 @@ describe('AppModule – LoggerModule useFactory', () => {
 describe('AppModule – ThrottlerModule useFactory', () => {
   const storage = { increment: jest.fn() };
   const capabilityTokens = { verify: jest.fn() };
+  // The tracker only needs the key set; a throwing one proves the ip fallback.
+  const jwks = {
+    keys: () => {
+      throw new Error('no key');
+    },
+  };
   const build = (vals: Record<string, unknown>) =>
-    mockCapture.throttlerFactory(cfg(vals), storage, capabilityTokens);
+    mockCapture.throttlerFactory(cfg(vals), storage, capabilityTokens, jwks);
 
   it('factory was captured (sanity)', () => {
     expect(typeof mockCapture.throttlerFactory).toBe('function');
@@ -312,7 +318,7 @@ describe('AppModule – ThrottlerModule useFactory', () => {
     expect(result.storage).toBe(storage);
   });
 
-  it('installs a tracker that buckets by user rather than by IP', () => {
+  it('installs an async tracker that falls back to the ip bucket without a verified token', async () => {
     const getTracker = build({}).getTracker;
     expect(typeof getTracker).toBe('function');
     const jwt = [
@@ -320,10 +326,10 @@ describe('AppModule – ThrottlerModule useFactory', () => {
       Buffer.from(JSON.stringify({ sub: 'user-77' })).toString('base64url'),
       'sig',
     ].join('.');
-    expect(getTracker({ headers: { authorization: `Bearer ${jwt}` }, ip: '9.9.9.9' })).toBe(
-      'u:user-77',
-    );
-    expect(getTracker({ headers: {}, ip: '9.9.9.9' })).toBe('ip:9.9.9.9');
+    await expect(
+      getTracker({ headers: { authorization: `Bearer ${jwt}` }, ip: '9.9.9.9' }),
+    ).resolves.toBe('ip:9.9.9.9');
+    await expect(getTracker({ headers: {}, ip: '9.9.9.9' })).resolves.toBe('ip:9.9.9.9');
   });
 
   it('imports the module providing the Redis storage', () => {

@@ -33,8 +33,16 @@ const E2EE_REQUEST_HEADERS: Record<string, string> = {
   'x-e2ee-timestamp': 'X-E2EE-Timestamp',
 };
 
-/** Response headers that must never be forwarded to the client. */
-const BLOCKED_RESPONSE_HEADERS = new Set(['authorization', 'transfer-encoding']);
+/** The only upstream response headers relayed to the client, besides `x-e2ee-*`. */
+const RELAYED_RESPONSE_HEADERS = new Set([
+  'content-type',
+  'retry-after',
+  'x-request-id',
+  'x-receipt-id',
+  'x-signing-algo',
+  'x-model-pub-key',
+  'x-encryption-version',
+]);
 
 interface UpstreamCompletion {
   id?: string;
@@ -385,7 +393,7 @@ export class CompletionsController {
     this.logger.debug(
       `Batch request user=${userId ?? 'unknown'} items=${requests.length} ` +
         `queueActive=${snapOnEntry.active} queueWaiting=${snapOnEntry.waiting} ` +
-        `e2eeHeaders=${JSON.stringify(e2eeHeaders)}`,
+        `e2eeHeaders=${Object.keys(e2eeHeaders).join(',')}`,
     );
 
     const clientGone = this.clientAbortSignal(req, res);
@@ -561,10 +569,13 @@ export class CompletionsController {
     };
   }
 
-  /** Every upstream header except the blocked ones. */
+  /** The allow-listed upstream headers; everything else is dropped. */
   private forwardHeaders(res: Response, upstream: globalThis.Response): void {
     upstream.headers.forEach((value, name) => {
-      if (!BLOCKED_RESPONSE_HEADERS.has(name)) res.setHeader(name, value);
+      const lower = name.toLowerCase();
+      if (RELAYED_RESPONSE_HEADERS.has(lower) || lower.startsWith('x-e2ee-')) {
+        res.setHeader(name, value);
+      }
     });
   }
 

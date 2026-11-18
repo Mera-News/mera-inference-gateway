@@ -67,7 +67,8 @@ describe('ExpoPushService', () => {
 
       await svc.sendSilent({ to: 'invalid-token', data: {} });
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid-token'));
+      expect(warnSpy).toHaveBeenCalledWith('Invalid Expo push token, skipping');
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('invalid-token');
       expect(mockChunkPushNotifications).not.toHaveBeenCalled();
     });
 

@@ -235,9 +235,11 @@ export class RedisJobStore implements JobStore {
     const [sharedSystem, e2eeSessionJson] = replies[1] as (string | null)[];
 
     return {
-      request: JSON.parse(requestJson) as RequestContext['request'],
+      request: parseStored(requestJson) as RequestContext['request'],
       sharedSystem: sharedSystem ?? null,
-      e2eeSession: e2eeSessionJson ? (JSON.parse(e2eeSessionJson) as Record<string, string>) : null,
+      e2eeSession: e2eeSessionJson
+        ? (parseStored(e2eeSessionJson) as Record<string, string>)
+        : null,
     };
   }
 
@@ -289,7 +291,7 @@ export class RedisJobStore implements JobStore {
     const results: JobResult[] = [];
     for (let i = 0; i < Number(requestCount ?? 0); i++) {
       const json = rawResults[String(i)];
-      if (json) results.push(JSON.parse(json) as JobResult);
+      if (json) results.push(parseStored(json) as JobResult);
     }
 
     return { userId, status: status as JobStatus, results };
@@ -413,6 +415,15 @@ export class RedisJobStore implements JobStore {
 
   async ping(): Promise<void> {
     await this.redis.ping();
+  }
+}
+
+/** V8's parse error quotes a slice of the text, so a stored row never reaches an error message. */
+function parseStored(json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error('stored job record is not valid JSON');
   }
 }
 

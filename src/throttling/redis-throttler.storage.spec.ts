@@ -91,33 +91,37 @@ describe('RedisThrottlerStorage', () => {
     });
   });
 
-  describe('fails OPEN', () => {
-    it('allows the request when Redis rejects (connection refused)', async () => {
+  describe('falls back to memory', () => {
+    it('counts in memory and blocks past the limit when Redis rejects', async () => {
       const redis = fakeRedis();
       redis.throttleIncr.mockRejectedValue(new Error('ECONNREFUSED'));
-      const r = await make(redis).increment('k', TTL_MS, 90);
-      expect(r).toEqual({
-        totalHits: 0,
-        timeToExpire: 60,
-        isBlocked: false,
-        timeToBlockExpire: 0,
-      });
+      const storage = make(redis);
+      const first = await storage.increment('k', TTL_MS, 1);
+      expect(first).toMatchObject({ totalHits: 1, isBlocked: false });
+      const second = await storage.increment('k', TTL_MS, 1);
+      expect(second).toMatchObject({ totalHits: 2, isBlocked: true });
+      await storage.onApplicationShutdown();
     });
 
     // The failure that actually bites under a burst: Redis responds, slowly.
-    // commandTimeout turns that into a rejection, which must also fail open.
-    it('allows the request when the command TIMES OUT rather than throwing early', async () => {
+    // commandTimeout turns that into a rejection, which must also be counted.
+    it('counts in memory when the command TIMES OUT rather than throwing early', async () => {
       const redis = fakeRedis();
       redis.throttleIncr.mockRejectedValue(new Error('Command timed out'));
-      const r = await make(redis).increment('k', TTL_MS, 90);
-      expect(r.isBlocked).toBe(false);
-      expect(r.totalHits).toBe(0);
+      const storage = make(redis);
+      await storage.increment('k', TTL_MS, 1);
+      const r = await storage.increment('k', TTL_MS, 1);
+      expect(r.isBlocked).toBe(true);
+      expect(r.totalHits).toBe(2);
+      await storage.onApplicationShutdown();
     });
 
     it('never rethrows, so a Redis outage cannot 5xx a request', async () => {
       const redis = fakeRedis();
       redis.throttleIncr.mockRejectedValue(new Error('boom'));
-      await expect(make(redis).increment('k', TTL_MS, 90)).resolves.toBeDefined();
+      const storage = make(redis);
+      await expect(storage.increment('k', TTL_MS, 90)).resolves.toBeDefined();
+      await storage.onApplicationShutdown();
     });
   });
 

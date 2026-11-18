@@ -5,6 +5,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module';
 import { CapabilityTokenService } from './auth/capability-token.service';
+import { JwksProvider } from './auth/jwks.provider';
 import { ThrottlingModule } from './throttling/throttling.module';
 import { RedisThrottlerStorage } from './throttling/redis-throttler.storage';
 import { createThrottleTracker } from './throttling/throttle-tracker';
@@ -78,7 +79,8 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
             serializers: {
               req: (req: { method: string; url: string }) => ({
                 method: req.method,
-                url: req.url,
+                // The query string can carry anything a caller puts there.
+                url: req.url.split('?')[0],
               }),
               res: (res: { statusCode: number }) => ({
                 statusCode: res.statusCode,
@@ -108,13 +110,14 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
     //
     // `getTracker` runs BEFORE AuthGuard (global guard vs controller-scoped),
     // so it picks a bucket from the bearer token itself. See throttle-tracker.ts:
-    // the JWT read there is deliberately unverified and grants nothing.
+    // only the token's signature is checked there, and it grants nothing.
     ThrottlerModule.forRootAsync({
       imports: [ThrottlingModule, AuthModule],
       useFactory: (
         configService: ConfigService,
         storage: RedisThrottlerStorage,
         capabilityTokens: CapabilityTokenService,
+        jwks: JwksProvider,
       ) => ({
         throttlers: [
           {
@@ -126,12 +129,11 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
           },
         ],
         storage,
-        getTracker: createThrottleTracker(capabilityTokens),
+        getTracker: createThrottleTracker(capabilityTokens, jwks.keys),
       }),
-      inject: [ConfigService, RedisThrottlerStorage, CapabilityTokenService],
+      inject: [ConfigService, RedisThrottlerStorage, CapabilityTokenService, JwksProvider],
     }),
-    // Job-store composition root: binds JOB_STORE to the dedicated Redis
-    // instance (INFERENCE_JOBS_REDIS_URL).
+    // Job-store composition root: binds JOB_STORE to INFERENCE_JOBS_REDIS_URL.
     JobStoreModule.register(),
     // Mount Bull Board at /queues. Basic-auth middleware is applied in
     // main.ts before this router handles any request, so the UI is protected.
@@ -143,7 +145,7 @@ const PINO_TO_GCP_SEVERITY: Record<number, string> = {
     ChatModule,
     AttestationModule,
     // Plaintext by necessity and off by default — see the privacy note in
-    // README.md / CLAUDE.md. Separate route, separate posture from the
+    // README.md. Separate route, separate posture from the
     // E2EE inference path.
     WebSearchModule,
     // ClaimReview lookup — same plaintext posture and the same off-by-default
