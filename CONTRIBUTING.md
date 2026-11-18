@@ -2,11 +2,11 @@
 
 Thank you for your interest in contributing to the Mera Inference Gateway.
 
-## Proprietary — Not Open Source
+## License
 
-This project is proprietary and confidential. All rights are reserved by Mera Labs B.V. (KVK 42077437); see [LICENSE.md](LICENSE.md). No license to use, copy, modify, or distribute the source code is granted. Contributions are accepted only from people authorized in writing by Mera Labs B.V., and any contribution is assigned to Mera Labs B.V. (see "License of Contributions" below).
+This project is licensed under the AGPL-3.0-only; see [LICENSE](LICENSE). Issues are welcome. Outside code contributions are not accepted yet.
 
-`"private": true` in `package.json` is intentional — it prevents accidental `npm publish`. The proprietary terms in `LICENSE.md` govern what you may do with the source code.
+`"private": true` in `package.json` is intentional: it prevents an accidental `npm publish`.
 
 ## What We Accept
 
@@ -19,11 +19,11 @@ For larger feature PRs, **open an issue for discussion before building**. This a
 
 ## What We Do Not Accept
 
-- PRs that remove, modify, or bypass `LICENSE.md`, `TRADEMARK.md`, or the `"license"` field in `package.json`
+- PRs that remove, modify, or bypass `LICENSE`, `TRADEMARK.md`, `COMMERCIAL.md`, or the `"license"` field in `package.json`
 - PRs that re-introduce hardcoded `mera.news` URLs or internal service addresses (these must use environment variables via `.env.example` and `ConfigService` instead)
 - PRs that introduce new Mera trademarks into copy or configuration in a way that would require trademark permission from Mera Labs B.V. (see [TRADEMARK.md](TRADEMARK.md))
 - PRs that add code reading, logging, or transforming encrypted message content — the gateway is an intentional E2EE passthrough
-- Dependency additions without a license review (run `npx license-checker --summary` and confirm every dependency permits commercial, proprietary redistribution)
+- Dependency additions whose licence is not compatible with AGPL-3.0-only
 
 ## Development Setup
 
@@ -101,11 +101,7 @@ Before submitting a PR, confirm:
 
 ## License of Contributions
 
-By submitting a contribution you agree that:
-
-1. You assign to Mera Labs B.V. all right, title, and interest in and to your contribution, which becomes part of the proprietary Software governed by [LICENSE.md](LICENSE.md). To the extent any right cannot be assigned, you grant Mera Labs B.V. a perpetual, worldwide, royalty-free, irrevocable license to use it for any purpose.
-2. You have the right to make the contribution (you own it or have written permission from the owner).
-3. The contribution does not grant you any license to the Software or any rights to the Mera trademarks.
+Outside code contributions are not accepted yet, so there are no contribution terms to agree to. The code is licensed under [LICENSE](LICENSE), and the Mera trademarks under [TRADEMARK.md](TRADEMARK.md).
 
 ## Contact
 

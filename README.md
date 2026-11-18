@@ -1,6 +1,6 @@
 # mera-inference-gateway
 
-[![License: Proprietary](https://img.shields.io/badge/License-Proprietary%20(All%20Rights%20Reserved)-red)](LICENSE.md)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue)](LICENSE)
 
 Privacy-first E2EE inference gateway. Proxies encrypted chat requests to NEAR AI TEE-protected inference without ever reading message content.
 
@@ -414,7 +414,7 @@ Before deploying a fork publicly you must update the following:
 - **Secrets** — generate a fresh `INFERENCE_CAPABILITY_SECRET` (`openssl rand -hex 32`). Never reuse the value from any other environment.
 - **CORS** — set `CORS_ORIGIN` to your client's origin.
 - **Bull Board credentials** — set `BULLBOARD_ADMIN_USERNAME` and `BULLBOARD_ADMIN_PASSWORD`. The admin UI returns `503` until both are configured — this is intentional (fail-closed).
-- **Branding** — this gateway is proprietary software owned by Mera Labs B.V. See [TRADEMARK.md](TRADEMARK.md) for trademark restrictions.
+- **Branding**: the code is AGPL-3.0-only, but the Mera names and logos are not. Give your fork a different name; see [TRADEMARK.md](TRADEMARK.md).
 
 See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 
@@ -431,9 +431,9 @@ See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 
 ## License & Trademark
 
-**This project is proprietary and confidential — not open source.** It is licensed under the proprietary terms in [LICENSE.md](LICENSE.md). Copyright © 2025-2026 Mera Labs B.V. (KVK 42077437), all rights reserved. No license to use, copy, modify, or distribute it is granted except by separate written agreement with Mera Labs B.V.
+This project is open source under the GNU Affero General Public License, version 3 only (AGPL-3.0-only). See [LICENSE](LICENSE). Copyright 2025-2026 Mera Labs B.V.
 
-See [TRADEMARK.md](TRADEMARK.md) for trademark restrictions.
+If the AGPL does not fit your use, see [COMMERCIAL.md](COMMERCIAL.md). The Mera names and logos are covered by [TRADEMARK.md](TRADEMARK.md).
 
-For licensing inquiries: contact@mera.news
+For licensing questions: contact@mera.news
 For security vulnerabilities: see [SECURITY.md](SECURITY.md)
