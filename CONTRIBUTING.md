@@ -81,10 +81,10 @@ npm run typecheck     # TypeScript type-check without emitting
 ## Making Changes
 
 1. **Fork** the repository
-2. **Create a branch** from `main`: `git checkout -b feat/your-feature`
+2. **Create a branch** from `dev`: `git checkout -b feat/your-feature`
 3. **Make your changes** — keep commits focused and atomic
 4. **Run checks**: `npm run lint && npm run format && npm test && npm run typecheck`
-5. **Open a pull request** against `main` at https://github.com/mera-news/mera-inference-gateway
+5. **Open a pull request** against `dev` at https://github.com/mera-news/mera-inference-gateway
 
 ## Pull Request Checklist
 

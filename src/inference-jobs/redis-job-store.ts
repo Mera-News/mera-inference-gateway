@@ -15,7 +15,7 @@ import {
   TurnStatus,
 } from './job-store.port';
 
-/** Fixed, not configurable via env — matches the approved bgsubmit design:
+/** Fixed, not configurable via env:
  *  long enough to cover create/flow/mint, short enough that a crashed
  *  reserver never blocks a retry for anywhere near the 24h job window. */
 const IDEMPOTENCY_RESERVATION_TTL_SECONDS = 60;
