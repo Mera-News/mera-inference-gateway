@@ -5,7 +5,7 @@ attempted, what it measured, what was abandoned and for what reason, and what is
 
 One section per month, **most recent first**. Appended at the end of a wave, never per commit.
 
-This is the **deployed** proxy, running in prod and staging. It is licensed AGPL-3.0-only. Do not confuse it with `mera-node`, which shares ancestry and deploys nowhere.
+This is the **deployed** proxy, running in prod and staging. It is licensed under the PolyForm Shield License 1.0.0. Do not confuse it with `mera-node`, which shares ancestry and deploys nowhere.
 
 ---
 

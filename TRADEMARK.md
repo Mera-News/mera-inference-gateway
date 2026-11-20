@@ -2,11 +2,11 @@
 
 "Mera", "Mera News", "Mera Protocol" and the Mera logos are trademarks of Mera Labs B.V., a company based in Amsterdam, the Netherlands.
 
-The GNU Affero General Public License covers the code in this repository. It does not cover these names or logos.
+The PolyForm Shield License 1.0.0 covers the code in this repository. It does not cover these names or logos.
 
 ## What you can do
 
-- Use, modify, self-host and redistribute the code under the AGPL-3.0.
+- Use, modify, self-host and redistribute the code under the PolyForm Shield License 1.0.0.
 - Say that your work is based on mera-inference-gateway, as long as it is true.
 
 ## What you cannot do
