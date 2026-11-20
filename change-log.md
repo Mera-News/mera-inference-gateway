@@ -3,9 +3,9 @@
 Monthly engineering record. Git holds every commit; what it does not hold is why something was
 attempted, what it measured, what was abandoned and for what reason, and what is still unresolved.
 
-One section per month, **most recent first**. Appended at the end of a wave, never per commit.
+One section per month, **most recent first**. Appended when a piece of work ends, never per commit.
 
-This is the **deployed** proxy, running in prod and staging. It is licensed under the PolyForm Shield License 1.0.0. Do not confuse it with `mera-node`, which shares ancestry and deploys nowhere.
+This is the **deployed** proxy, running in prod and staging. It is licensed under the PolyForm Shield License 1.0.0.
 
 ---
 
@@ -16,8 +16,7 @@ This is the **deployed** proxy, running in prod and staging. It is licensed unde
 **Shipped:** the Brave web-search proxy moved here from the GraphQL API (08-07), putting search behind
 the same capability-token boundary as inference. Multi-query `/v1/web-search` (08-25), fanning queries
 out server-side rather than making the device issue them one at a time. Request-entry deadlines,
-client-disconnect propagation, and model and user attribution in timeout logs (08-03). CLAUDE.md
-trimmed from 268 lines to 59, with the detail moved into the area skill.
+client-disconnect propagation, and model and user attribution in timeout logs (08-03).
 
 **Rejected:** search living on the GraphQL API, where it sat outside the encrypted path.
 
@@ -37,7 +36,7 @@ to 2h in the same change. A 10-minute in-memory attestation cache with upstream 
 **Rejected:** Mongo as the job store. The gateway holds short-lived job state and nothing durable, so
 a document database was carrying operational weight it never needed to.
 
-**Open:** nothing. The port abstraction is the reason this swap took one wave.
+**Open:** nothing. The port abstraction is the reason this swap was small.
 
 ---
 

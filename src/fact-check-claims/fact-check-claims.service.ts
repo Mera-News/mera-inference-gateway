@@ -208,8 +208,8 @@ export class FactCheckClaimsService {
 
       // THE HONEST EMPTY. Google returns `{}` (no `claims` key at all) for a
       // query no signatory has reviewed. A 200 with `[]` is that answer, and it
-      // is the normal outcome for most news — see the coverage measurement in
-      // the wave plan. It is NOT a failure and must not be rendered as one.
+      // is the normal outcome: most news claims have no published review. It
+      // is NOT a failure and must not be rendered as one.
       const flattened: ClaimReviewItem[] = [];
       for (const claim of claims) {
         const reviews = Array.isArray(claim?.claimReview) ? claim.claimReview : [];
