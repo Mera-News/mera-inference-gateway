@@ -24,6 +24,7 @@ Closes #
 - [ ] No hardcoded `mera.news` URLs or internal service addresses (use `.env` / `ConfigService`)
 - [ ] No Mera trademarks introduced in new copy (see TRADEMARK.md)
 - [ ] If an endpoint or route was added or changed: documentation / `.env.example` updated accordingly
+- [ ] I agree to the contribution terms in CONTRIBUTING.md.
 
 ## Notes for reviewers
 

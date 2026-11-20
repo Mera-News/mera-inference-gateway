@@ -4,7 +4,7 @@
   "description": "Privacy-first E2EE inference gateway — proxies encrypted chat requests to NEAR AI without ever reading message content",
   "author": "Mera Labs B.V.",
   "private": true,
-  "license": "AGPL-3.0-only",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mera-news/mera-inference-gateway.git"

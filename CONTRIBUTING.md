@@ -4,7 +4,7 @@ Thank you for your interest in contributing to the Mera Inference Gateway.
 
 ## License
 
-This project is licensed under the AGPL-3.0-only; see [LICENSE](LICENSE). Issues are welcome. Outside code contributions are not accepted yet.
+Issues are welcome.
 
 `"private": true` in `package.json` is intentional: it prevents an accidental `npm publish`.
 
@@ -23,7 +23,6 @@ For larger feature PRs, **open an issue for discussion before building**. This a
 - PRs that re-introduce hardcoded `mera.news` URLs or internal service addresses (these must use environment variables via `.env.example` and `ConfigService` instead)
 - PRs that introduce new Mera trademarks into copy or configuration in a way that would require trademark permission from Mera Labs B.V. (see [TRADEMARK.md](TRADEMARK.md))
 - PRs that add code reading, logging, or transforming encrypted message content — the gateway is an intentional E2EE passthrough
-- Dependency additions whose licence is not compatible with AGPL-3.0-only
 
 ## Development Setup
 
@@ -99,11 +98,22 @@ Before submitting a PR, confirm:
 - [ ] No Mera trademarks introduced in new copy (see [TRADEMARK.md](TRADEMARK.md))
 - [ ] No code added that reads, logs, or transforms encrypted message content
 
-## License of Contributions
-
-Outside code contributions are not accepted yet, so there are no contribution terms to agree to. The code is licensed under [LICENSE](LICENSE), and the Mera trademarks under [TRADEMARK.md](TRADEMARK.md).
-
 ## Contact
 
 - **Security vulnerabilities**: see [SECURITY.md](SECURITY.md) — email contact@mera.news. Do not open public issues for vulnerabilities.
 - **Licensing questions**: contact@mera.news
+
+## Contribution terms
+
+By opening a pull request you confirm that:
+
+1. You wrote the contribution yourself, or you have the right to submit it.
+2. If your employer has rights in what you write, you have its permission to contribute.
+3. You keep the copyright in your contribution.
+4. You grant Mera Labs B.V. a perpetual, worldwide, non-exclusive, royalty-free, irrevocable
+   licence to use, copy, modify, publish, distribute and sublicense your contribution, including
+   under any patent claims of yours that it would otherwise infringe. Mera Labs B.V. may do so as
+   part of this project or of any other Mera Labs product, under this repository's licence or under
+   any other licence terms, commercial ones included.
+
+Tick the box in the pull request to say you agree. A pull request without it is not merged.

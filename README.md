@@ -1,7 +1,5 @@
 # mera-inference-gateway
 
-[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue)](LICENSE)
-
 Privacy-first E2EE inference gateway. Proxies encrypted chat requests to NEAR AI TEE-protected inference without ever reading message content.
 
 ## Why This Exists
@@ -414,7 +412,7 @@ Before deploying a fork publicly you must update the following:
 - **Secrets** — generate a fresh `INFERENCE_CAPABILITY_SECRET` (`openssl rand -hex 32`). Never reuse the value from any other environment.
 - **CORS** — set `CORS_ORIGIN` to your client's origin.
 - **Bull Board credentials** — set `BULLBOARD_ADMIN_USERNAME` and `BULLBOARD_ADMIN_PASSWORD`. The admin UI returns `503` until both are configured — this is intentional (fail-closed).
-- **Branding**: the code is AGPL-3.0-only, but the Mera names and logos are not. Give your fork a different name; see [TRADEMARK.md](TRADEMARK.md).
+- **Branding**: the code is under the PolyForm Shield License 1.0.0, but the Mera names and logos are not. Give your fork a different name; see [TRADEMARK.md](TRADEMARK.md).
 
 See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 
@@ -429,11 +427,21 @@ See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 - **Input validation** — global `ValidationPipe` with `whitelist: true`
 - **Bull Board** — fail-closed: returns `503` when credentials are not configured
 
-## License & Trademark
+## Licence
 
-This project is open source under the GNU Affero General Public License, version 3 only (AGPL-3.0-only). See [LICENSE](LICENSE). Copyright 2025-2026 Mera Labs B.V.
+Copyright Mera Labs B.V.
 
-If the AGPL does not fit your use, see [COMMERCIAL.md](COMMERCIAL.md). The Mera names and logos are covered by [TRADEMARK.md](TRADEMARK.md).
+Required Notice: Copyright Mera Labs B.V. (https://mera.news)
+
+This code is source-available under the PolyForm Shield License 1.0.0. See `LICENSE`.
+
+In short: you may run it, change it and build on it for any purpose, except to provide a product
+that competes with this software or with a product Mera Labs provides using it, such as Mera News.
+This summary is not the licence. The `LICENSE` file is.
+
+Mera News and Mera Protocol are trademarks. See `TRADEMARK.md`.
+For a use the licence does not allow, see `COMMERCIAL.md`.
+To contribute, see `CONTRIBUTING.md`.
 
 For licensing questions: contact@mera.news
 For security vulnerabilities: see [SECURITY.md](SECURITY.md)
