@@ -1,10 +1,10 @@
 # mera-inference-gateway
 
-Privacy-first E2EE inference gateway. Proxies encrypted chat requests to NEAR AI TEE-protected inference without ever reading message content.
+The inference gateway behind Mera News. It relays the app's end-to-end encrypted AI requests to NEAR AI and RedPill, which run models inside trusted execution environments. It does not decrypt message content.
 
 ## Why This Exists
 
-**The inference path is an opaque pipe.** Messages are end-to-end encrypted on the client using NEAR AI's E2EE protocol before they reach this gateway. On the inference routes — `POST /v1/chat/completions`, `POST /v1/chat/completions/batch`, `POST /v1/inference/jobs` and their results — the gateway authenticates the request, then forwards the encrypted payload directly to NEAR AI running inside a Trusted Execution Environment (TEE). It never decrypts or inspects message content; decryption happens only inside the TEE.
+**The inference path is a pipe for ciphertext.** On the inference routes (`POST /v1/chat/completions`, `POST /v1/chat/completions/batch`, `POST /v1/inference/jobs` and their results) the gateway checks the caller's token and forwards the request to NEAR AI or RedPill. The Mera News app encrypts message content to a key from the model's attestation report, so the gateway passes only ciphertext it cannot read. The gateway does not check that content is encrypted: a client that sends plain text gets it relayed as plain text. In plain text the gateway sees the model name, the other request parameters, the E2EE public keys in the headers, the account id, and the size and timing of each request.
 
 ```
 Client (E2EE encrypt) --> mera-inference-gateway --> NEAR AI (TEE decrypt + infer)
@@ -262,6 +262,10 @@ Proxies the NEAR AI TEE attestation report. Use this to retrieve the model's cur
 
 **Response:** With a `nonce`, the full NEAR AI attestation report JSON, including `signing_public_key`, `signing_address`, `signing_algo`, `intel_quote` and `nvidia_payload`. When that nonce is non-empty and NVIDIA answers in time, `model_attestations[0]` also carries `nvidia_attestation`: `{ tokens, keys }`, NVIDIA's signed verdict and the keys that signed it. The gateway relays these and never judges them, and the field is absent on any NVIDIA failure. Without a `nonce`, the report is cut down to the signing fields.
 
+The gateway relays attestation and never judges it. No request is refused because an attestation is missing or fails. The only effect on routing: a model whose attestation endpoint fails two probes in a row is marked down until three pass. A report fetched without a nonce is cached for 10 minutes and shared by all callers. RedPill's report is one key set for all its models.
+
+The Mera News app does the checking. Before it uses a key, it checks that Intel's signed quote chains to a pinned Intel root and commits that exact key. If not, the key is refused and nothing is encrypted to it or sent. The app does not check freshness on normal calls (it sends a nonce only from its Verify attestation screen), Intel's platform patch level or the enclave identity, the enclave's software against published values, or that the GPUs belong to the enclave.
+
 ---
 
 ### `GET /health`
@@ -420,12 +424,16 @@ See [TRADEMARK.md](TRADEMARK.md) for the full trademark policy.
 
 - **E2EE passthrough** — the gateway never decrypts or inspects message content on any route
 - **Two plaintext routes, scoped** — `POST /v1/web-search` and `POST /v1/fact-check-claims` receive search terms in the clear because a third-party index must be queried with them. Both off by default; the query is never logged and never stored; nothing but the query text (plus optional language/age filters) is sent upstream. Neither can answer "no results" when it did not actually search — a disabled or throttled route returns `503 search-unavailable`
-- **Stateless JWT auth** — Ed25519 asymmetric verification using JWKS; no shared secret, no database
+- **Stateless JWT auth**: tokens are verified against the auth service's published key set (JWKS), with no database. Job follow-up tokens are HMAC-signed with a server secret.
 - **Capability tokens** — scoped per `requestId`; limits blast radius of a leaked token to a single job
 - **Rate limiting** — configurable per-window throttling via `@nestjs/throttler` (default: 30 req/60 s)
 - **Helmet** — standard HTTP security headers on all responses
 - **Input validation** — global `ValidationPipe` with `whitelist: true`
 - **Bull Board** — fail-closed: returns `503` when credentials are not configured
+
+## What this repository proves
+
+A push to `main` builds this Dockerfile on Google Cloud Build and deploys the image to Mera's Cloud Run service, labelled with the commit. That is the link between this code and the running gateway, and it is Mera's word, not a proof. The build is not reproducible, the base image is pinned by tag rather than digest, images are not signed, and no image digest or deployed commit is published. The gateway runs on ordinary Cloud Run, not in a trusted execution environment, so nothing attests the code it runs. The design treats the gateway as untrusted: message privacy depends on the Mera News app checking the model's attestation, not on this server. Reproducible builds and signed release digests are not in place yet.
 
 ## Licence
 
