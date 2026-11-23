@@ -164,10 +164,13 @@ export class AuthGuard implements CanActivate, OnModuleInit, OnModuleDestroy {
       ) {
         throw new UnauthorizedException('Invalid or expired token');
       }
-      this.logger.error(
-        { err: error instanceof Error ? error.message : String(error) },
-        'Unexpected authentication error',
-      );
+      // Any algorithm but EdDSA (HS256, none) is a refused token, not a fault.
+      if (!(error instanceof joseErrors.JOSEAlgNotAllowed)) {
+        this.logger.error(
+          { err: error instanceof Error ? error.message : String(error) },
+          'Unexpected authentication error',
+        );
+      }
       throw new UnauthorizedException('Authentication failed');
     }
   }

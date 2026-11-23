@@ -211,6 +211,36 @@ describe('AuthGuard', () => {
       );
     });
 
+    it.each([
+      [
+        'HS256',
+        () =>
+          new (jest.requireActual('jose').SignJWT)({ sub: 'u1' })
+            .setProtectedHeader({ alg: 'HS256' })
+            .setIssuer(JWT_ISSUER)
+            .sign(new TextEncoder().encode('k'.repeat(32))),
+      ],
+      [
+        'none',
+        async () => {
+          const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+          return `${b64({ alg: 'none' })}.${b64({ sub: 'u1', iss: JWT_ISSUER })}.`;
+        },
+      ],
+    ])('refuses a %s token without an error log line', async (_alg, mint) => {
+      // Real jose: it refuses the algorithm before it asks for a key.
+      mockJwtVerify.mockImplementation(jest.requireActual('jose').jwtVerify);
+      const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      try {
+        await expect(guard.canActivate(makeContext(`Bearer ${await mint()}`))).rejects.toThrow(
+          new UnauthorizedException('Authentication failed'),
+        );
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
     it('maps an unexpected error to UnauthorizedException', async () => {
       mockJwtVerify.mockRejectedValue(new Error('network blip'));
       await expect(guard.canActivate(makeContext('Bearer t'))).rejects.toThrow(
