@@ -6,8 +6,9 @@ const RedisMock = require('ioredis-mock');
 import { PROFILES } from './profiles';
 import { RoutingService } from './routing.service';
 
-const NEAR = 'near/qwen3.8-27b';
-const NEAR_MODEL = 'Qwen/Qwen3.8-27B';
+// The chat lanes' head: taking it down is what degrades a lane.
+const NEAR = 'near/qwen3.6-35b-a3b';
+const NEAR_MODEL = 'Qwen/Qwen3.6-35B-A3B-FP8';
 
 function setup(env: Record<string, string> = {}) {
   const redis = new RedisMock();
@@ -46,11 +47,10 @@ describe('RoutingService', () => {
     expect(body.lanes['chat-tools']).toEqual({
       state: 'ok',
       profiles: [
-        'near/qwen3.8-27b',
         'near/qwen3.6-35b-a3b',
         'redpill/qwen3.8-27b',
         'redpill/gemma-4-31b',
-        'redpill/kimi-k2.6',
+        'near/qwen3.8-27b',
       ],
     });
     expect(body.lanes.scoring.profiles[0]).toBe('near/qwen3.6-35b-a3b');
@@ -65,7 +65,7 @@ describe('RoutingService', () => {
     const body = await svc.body();
     expect(body.version).toBe(1);
     expect(body.lanes['chat-tools'].state).toBe('degraded');
-    expect(body.lanes['chat-tools'].profiles[0]).toBe('near/qwen3.6-35b-a3b');
+    expect(body.lanes['chat-tools'].profiles[0]).toBe('redpill/qwen3.8-27b');
     expect(await svc.isDown('near', NEAR_MODEL)).toBe(true);
     expect(errorSpy).toHaveBeenCalledWith(`routing_state_change profile=${NEAR} from=up to=down`);
   });
@@ -174,7 +174,7 @@ describe('RoutingService.allDown', () => {
     const a = setup();
     await a.svc.setPin(NEAR, 'down');
     expect(await a.svc.allDown('near', [NEAR_MODEL])).toBe(true);
-    expect(await a.svc.allDown('near', [NEAR_MODEL, 'Qwen/Qwen3.6-35B-A3B-FP8'])).toBe(false);
+    expect(await a.svc.allDown('near', [NEAR_MODEL, 'Qwen/Qwen3.8-27B'])).toBe(false);
     expect(await a.svc.allDown('near', [])).toBe(false);
     const b = setup({ REDPILL_API_KEY: '' });
     expect(await b.svc.allDown('redpill', ['anything'])).toBe(true);

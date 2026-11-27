@@ -74,7 +74,7 @@ describe('routing over HTTP (real module wiring, Redis mocked)', () => {
   });
 
   it('an admin pin moves the table and the header; no token or a wrong one is refused', async () => {
-    const pin = { profile: 'near/qwen3.8-27b', state: 'down' };
+    const pin = { profile: 'near/qwen3.6-35b-a3b', state: 'down' };
     await request(app.getHttpServer()).post('/v1/routing/admin/pin').send(pin).expect(401);
     const res = await request(app.getHttpServer())
       .post('/v1/routing/admin/pin')
@@ -84,15 +84,14 @@ describe('routing over HTTP (real module wiring, Redis mocked)', () => {
     expect(res.body.lanes['chat-tools']).toEqual({
       state: 'degraded',
       profiles: [
-        'near/qwen3.6-35b-a3b',
         'redpill/qwen3.8-27b',
         'redpill/gemma-4-31b',
-        'redpill/kimi-k2.6',
+        'near/qwen3.8-27b',
       ],
     });
     // the 3s snapshot cache is dropped by the change on this instance
     const after = await request(app.getHttpServer()).get('/v1/routing').expect(200);
     expect(after.headers['x-mera-routing']).toBe('1');
-    expect(await routing.isDown('near', 'Qwen/Qwen3.8-27B')).toBe(true);
+    expect(await routing.isDown('near', 'Qwen/Qwen3.6-35B-A3B-FP8')).toBe(true);
   });
 });
